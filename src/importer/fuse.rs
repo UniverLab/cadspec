@@ -375,6 +375,13 @@ mod tests {
     }
 
     #[test]
+    fn pts_eq_rejects_an_x_difference_exactly_at_the_tolerance() {
+        // Same boundary on the x axis: the first `< 1e-6` must stay strict.
+        // A `<=` rewrite would call these equal.
+        assert!(!pts_eq([0.0, 0.0], [1e-6, 0.0]));
+    }
+
+    #[test]
     fn edge_key_canonicalizes_the_endpoint_order() {
         assert_eq!(edge_key((1, 2), (3, 4)), ((1, 2), (3, 4)));
         assert_eq!(edge_key((3, 4), (1, 2)), ((1, 2), (3, 4)));

@@ -346,6 +346,36 @@ closed = true
     }
 
     #[test]
+    fn compile_emits_a_rect_entity_per_rect() {
+        // A rect compiles to one closed 4-vertex polyline at the right place.
+        let drawing = compile_drawing(
+            "rects",
+            r#"[layer]
+name = "l"
+
+[[rect]]
+origin = [1.0, 2.0]
+width = 3.0
+height = 4.0
+"#,
+        );
+        let rects: Vec<&dxf::entities::LwPolyline> = drawing
+            .entities()
+            .filter_map(|e| match &e.specific {
+                EntityType::LwPolyline(p) => Some(p),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(rects.len(), 1, "one rect must emit one polyline");
+        let pts: Vec<(f64, f64)> = rects[0].vertices.iter().map(|v| (v.x, v.y)).collect();
+        assert_eq!(
+            pts,
+            vec![(1.0, 2.0), (4.0, 2.0), (4.0, 6.0), (1.0, 6.0)],
+            "rect corners follow origin + width/height"
+        );
+    }
+
+    #[test]
     fn compile_labels_dims_with_the_measured_distance() {
         // from (2,2) → to (5,6): dx=3, dy=4 → distance 5 → label "5.00".
         let drawing = compile_drawing(

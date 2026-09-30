@@ -54,12 +54,30 @@ fn running_pid(project_dir: &Path) -> Option<u32> {
 /// Block until the server accepts a connection on `port`, or `timeout` elapses.
 fn wait_until_ready(port: u16, timeout: Duration) -> bool {
     let addr = SocketAddr::from(([127, 0, 0, 1], port));
-    let deadline = Instant::now() + timeout;
-    while Instant::now() < deadline {
-        if TcpStream::connect_timeout(&addr, Duration::from_millis(200)).is_ok() {
+    wait_until_deadline(
+        timeout,
+        Instant::now,
+        || TcpStream::connect_timeout(&addr, Duration::from_millis(200)).is_ok(),
+        || std::thread::sleep(Duration::from_millis(100)),
+    )
+}
+
+/// The readiness wait with its clock, its probe and its sleep injected, so the
+/// deadline edge can be tested without racing a real timer: the budget is
+/// spent only once the clock has advanced the whole `timeout` past its first
+/// reading.
+fn wait_until_deadline(
+    timeout: Duration,
+    now: impl Fn() -> Instant,
+    ready: impl Fn() -> bool,
+    sleep: impl Fn(),
+) -> bool {
+    let start = now();
+    while now().saturating_duration_since(start) < timeout {
+        if ready() {
             return true;
         }
-        std::thread::sleep(Duration::from_millis(100));
+        sleep();
     }
     false
 }
@@ -164,7 +182,28 @@ pub fn serve_stop(project_dir: &Path, _port: u16) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::cell::Cell;
     use std::sync::atomic::{AtomicUsize, Ordering};
+
+    /// A clock the test drives by hand, so a deadline edge can be reached
+    /// exactly instead of racing a real timer.
+    struct FakeClock(Cell<Instant>);
+
+    impl FakeClock {
+        fn new() -> Self {
+            FakeClock(Cell::new(Instant::now()))
+        }
+
+        fn now(&self) -> Instant {
+            self.0.get()
+        }
+
+        fn advance(&self, by: Duration) -> Instant {
+            let next = self.0.get() + by;
+            self.0.set(next);
+            next
+        }
+    }
 
     /// Unique temp dir per test; removed on drop even when an assert panics.
     struct TempDir(PathBuf);
@@ -206,6 +245,28 @@ mod tests {
     }
 
     #[test]
+    fn process_alive_rejects_a_pid_that_does_not_exist() {
+        // A `true` stub would pass the live-pid assert above; a dead pid
+        // must report false so the stub fails here.
+        assert!(!process_alive(1_000_000_000));
+    }
+
+    #[test]
+    fn serve_stop_clears_a_stale_pid_file() {
+        // A dead pid in the file means no daemon: stop must remove the
+        // stale file and succeed. An `Ok(())` stub would leave the file.
+        let dir = TempDir::new("cadspec_daemon_stale");
+        fs::create_dir_all(runtime_dir(dir.path())).unwrap();
+        fs::write(pid_path(dir.path()), "1000000000\n").unwrap();
+        assert!(!process_alive(1_000_000_000), "stale pid must be dead");
+        serve_stop(dir.path(), 0).expect("stale stop must succeed");
+        assert!(
+            !pid_path(dir.path()).exists(),
+            "stale pid file must be removed"
+        );
+    }
+
+    #[test]
     fn running_pid_needs_a_pid_file_for_a_live_process() {
         let dir = TempDir::new("cadspec_daemon_pid");
         // No pid file yet: nothing is running.
@@ -231,6 +292,60 @@ mod tests {
         // rewrite still returns false here, but the live-listener assert
         // above then fails.
         assert!(!wait_until_ready(port, Duration::ZERO));
+    }
+
+    #[test]
+    fn the_readiness_wait_stops_at_the_deadline_edge() {
+        // The clock lands exactly on the deadline at the first guard, so the
+        // budget is already spent: no probe may run. A `<=` rewrite would
+        // probe once and answer `true` here.
+        let clock = FakeClock::new();
+        let probes = Cell::new(0);
+        let ready = wait_until_deadline(
+            Duration::ZERO,
+            || clock.now(),
+            || {
+                probes.set(probes.get() + 1);
+                true
+            },
+            || (),
+        );
+        assert!(!ready, "a spent deadline must not probe at all");
+        assert_eq!(probes.get(), 0);
+    }
+
+    #[test]
+    fn the_readiness_wait_probes_until_ready_and_gives_up_at_the_deadline() {
+        // Answering on the third probe: ready, after exactly two failed tries.
+        let clock = FakeClock::new();
+        let probes = Cell::new(0);
+        let ready = wait_until_deadline(
+            Duration::from_secs(5),
+            || clock.now(),
+            || {
+                probes.set(probes.get() + 1);
+                probes.get() == 3
+            },
+            || (),
+        );
+        assert!(ready);
+        assert_eq!(probes.get(), 3);
+
+        // Never answering, with the clock moving past the deadline: bounded,
+        // so it stops instead of looping forever.
+        let clock = FakeClock::new();
+        let probes = Cell::new(0);
+        let ready = wait_until_deadline(
+            Duration::from_millis(250),
+            || clock.advance(Duration::from_millis(100)),
+            || {
+                probes.set(probes.get() + 1);
+                false
+            },
+            || (),
+        );
+        assert!(!ready);
+        assert_eq!(probes.get(), 2, "probes stop once the deadline passes");
     }
 
     #[test]

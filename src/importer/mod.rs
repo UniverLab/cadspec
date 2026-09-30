@@ -403,7 +403,7 @@ fn collect_layer_names_from_layer_table(content: &str) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use dxf::entities::{Arc, Circle, Entity, Line, LwPolyline, ModelPoint, Solid};
+    use dxf::entities::{Arc, Circle, Entity, Insert, Line, LwPolyline, ModelPoint, Solid};
     use dxf::{LwPolylineVertex, Point};
 
     /// Unique-per-run temp directory (under `/tmp/cadspec_importer_*`) that
@@ -600,6 +600,35 @@ mod tests {
             unsupported, 0,
             "a degenerate solid is skipped without being counted"
         );
+    }
+
+    #[test]
+    fn classify_entity_counts_each_unsupported_entity() {
+        // Inserts are not importable: each one must bump the counter by one.
+        // `+= 1` rewritten as `*= 1` would leave the count at 0, and as
+        // `-= 1` it would underflow — both must fail this assert.
+        let mut unsupported = 0usize;
+        assert!(
+            classify_entity(&EntityType::Insert(Insert::default()), &mut unsupported).is_none()
+        );
+        assert_eq!(unsupported, 1);
+        assert!(
+            classify_entity(&EntityType::Insert(Insert::default()), &mut unsupported).is_none()
+        );
+        assert_eq!(unsupported, 2, "each unsupported entity increments once");
+    }
+
+    #[test]
+    fn fallback_layers_from_text_registers_layers_from_dxf_text() {
+        // An `Ok(())` stub would leave `layers` empty; the real fallback
+        // must register every layer named by group-8 codes in the text.
+        let dir = TempDir::new("fallback_layers");
+        let file = dir.as_ref().join("broken.dxf");
+        fs::write(&file, "0\nSECTION\n8\nWall\n8\nDoor\n").expect("temp DXF must be writable");
+        let mut layers: BTreeMap<String, LayerFile> = BTreeMap::new();
+        fallback_layers_from_text(&file, None, &mut layers).expect("fallback must read text");
+        let keys: Vec<&str> = layers.keys().map(String::as_str).collect();
+        assert_eq!(keys, vec!["Door", "Wall"]);
     }
 
     #[test]

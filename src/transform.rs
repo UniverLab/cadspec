@@ -705,6 +705,29 @@ offset = [3.0, 0.0]
     }
 
     #[test]
+    fn linear_array_copies_points_moving_position() {
+        let cf = parse(
+            r#"
+[[point]]
+id = "p"
+position = [1.0, 2.0]
+
+[[array]]
+target = "p"
+mode = "linear"
+count = 3
+offset = [2.0, 0.0]
+"#,
+        );
+        let out = expand_cf(&cf);
+        assert_eq!(out.points.len(), 3, "both point copies must be created");
+        assert_eq!(out.points[1].common.id.as_deref(), Some("p@1"));
+        assert_eq!(out.points[2].common.id.as_deref(), Some("p@2"));
+        assert_eq!(out.points[1].position, [3.0, 2.0]);
+        assert_eq!(out.points[2].position, [5.0, 2.0]);
+    }
+
+    #[test]
     fn transform_points_translates_some_and_keeps_none() {
         let mut pts = Some(vec![[0.0, 0.0], [1.0, 2.0]]);
         transform_points(&mut pts, &PointOp::Translate { dx: 3.0, dy: -1.0 });
