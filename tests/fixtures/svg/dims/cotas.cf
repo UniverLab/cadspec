@@ -1,0 +1,58 @@
+[layer]
+name = "cotas"
+color = "#FF5050"
+
+# Frame rect pins extents x in [0, 14], y in [0, 10]: world 16 x 12,
+# scale 100 at width 1600 so the default label font (0.22 * scale = 22)
+# sits strictly inside the (9, 28) clamp range.
+[[rect]]
+id = "dm-frame"
+origin = [0.0, 0.0]
+width = 14.0
+height = 10.0
+
+# Horizontal dim, default text_size (gap 0.15 path).
+[[dim]]
+id = "dm-h"
+from = [0.0, 0.0]
+to = [6.0, 0.0]
+offset = -0.6
+
+# Vertical dim: normal has nx = -1, kills the nx * offset mutants.
+[[dim]]
+id = "dm-v"
+from = [2.0, 0.0]
+to = [2.0, 5.0]
+offset = 0.8
+
+# Diagonal dim with dx == dy: dx*dx - dy*dy == 0 kills the + -> - mutant.
+[[dim]]
+id = "dm-d"
+from = [0.0, 0.0]
+to = [4.0, 4.0]
+offset = 0.5
+
+# Explicit text_size 0.5 (0.5 * 0.6 = 0.3 != default gap 0.15).
+[[dim]]
+id = "dm-t"
+from = [8.0, 5.0]
+to = [14.0, 5.0]
+offset = 0.6
+text_size = 0.5
+
+# Angular dim (renderer draws it linear), custom precision, no units.
+[[dim]]
+id = "dm-a"
+type = "angular"
+from = [0.0, 10.0]
+to = [6.0, 10.0]
+offset = 0.6
+precision = 1
+show_units = false
+
+# Degenerate-but-drawn dim: len == 1e-9 exactly, the < vs <= edge.
+[[dim]]
+id = "dm-tiny"
+from = [0.0, 2.0]
+to = [0.000000001, 2.0]
+offset = 0.3

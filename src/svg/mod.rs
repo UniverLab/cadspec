@@ -296,8 +296,8 @@ fn render_layers(
     highlight: &[String],
 ) -> Scene {
     let bounds = compute_bounds(layers);
-    let world_w = bounds.max_x - bounds.min_x + 2.0 * PADDING;
-    let world_h = bounds.max_y - bounds.min_y + 2.0 * PADDING;
+    let world_w = bounds.max_x - bounds.min_x + PADDING * 2.0;
+    let world_h = bounds.max_y - bounds.min_y + PADDING * 2.0;
 
     let width_px = width as f64;
     let height_px = (width_px * world_h / world_w).min(MAX_HEIGHT_PX);
@@ -451,6 +451,7 @@ pattern = "ansi31"
 mod tests {
     use super::fixtures::sample_layers;
     use super::*;
+    use std::path::Path;
 
     #[test]
     fn renders_all_primitives() {
@@ -507,5 +508,124 @@ mod tests {
         let (px, py) = scene.world_to_px(scene.world_bounds[0], scene.world_bounds[1]);
         assert!(px > 0.0 && px < scene.width_px);
         assert!(py > 0.0 && py <= scene.height_px);
+    }
+
+    #[test]
+    fn scene_world_to_px_maps_exactly() {
+        let scene = Scene {
+            svg: String::new(),
+            px_per_unit: 2.0,
+            offset_x: 1.0,
+            offset_y: 0.5,
+            world_h: 10.0,
+            width_px: 100.0,
+            height_px: 100.0,
+            world_bounds: [0.0, 0.0, 10.0, 10.0],
+        };
+        let (px, py) = scene.world_to_px(4.0, 4.0);
+        assert_eq!((px, py), (6.0, 13.0));
+    }
+
+    #[test]
+    fn load_project_layers_filters_by_name() {
+        let dir = Path::new("tests/fixtures/svg/layers");
+        let (_, layers) = load_project_layers(dir, Some("auto")).unwrap();
+        assert_eq!(layers.len(), 1);
+        assert_eq!(layers[0].0, "auto");
+        let (_, none) = load_project_layers(dir, Some("nope")).unwrap();
+        assert!(none.is_empty());
+    }
+
+    #[test]
+    fn layer_display_color_falls_back_to_palette() {
+        let cf = CfFile::default();
+        assert_eq!(layer_display_color(&cf, 0), "#FFFFFF");
+        assert_eq!(layer_display_color(&cf, 7), "#FFFFFF");
+    }
+
+    #[test]
+    fn bounds_track_extents() {
+        let mut b = Bounds::empty();
+        assert!(b.is_empty());
+        b.add(2.0, 3.0);
+        assert!(!b.is_empty());
+        b.add(-1.0, 5.0);
+        assert_eq!((b.min_x, b.min_y, b.max_x, b.max_y), (-1.0, 3.0, 2.0, 5.0));
+    }
+
+    #[test]
+    fn compute_bounds_covers_circle_extremes() {
+        let toml = r##"
+[layer]
+name = "c"
+color = "#FFFFFF"
+
+[[circle]]
+id = "c-1"
+center = [5.0, 5.0]
+radius = 1.5
+"##;
+        let cf: CfFile = toml::from_str(toml).unwrap();
+        let b = compute_bounds(&[("c".to_string(), cf)]);
+        assert_eq!((b.min_x, b.min_y, b.max_x, b.max_y), (3.5, 3.5, 6.5, 6.5));
+    }
+
+    #[test]
+    fn compute_bounds_covers_arc_extremes() {
+        let toml = r##"
+[layer]
+name = "a"
+color = "#FFFFFF"
+
+[[arc]]
+id = "a-1"
+center = [5.0, 5.0]
+radius = 1.5
+from_angle = 30.0
+to_angle = 120.0
+"##;
+        let cf: CfFile = toml::from_str(toml).unwrap();
+        let b = compute_bounds(&[("a".to_string(), cf)]);
+        assert_eq!((b.min_x, b.min_y, b.max_x, b.max_y), (3.5, 3.5, 6.5, 6.5));
+    }
+
+    #[test]
+    fn render_scale_matches_width_over_world() {
+        // World 9 x 3 at width 1600: width/world_w is one ulp below
+        // height/world_h, so the width term binds exactly and the `*` mutant
+        // (which would pick the height term) is observable.
+        let toml = r##"
+[layer]
+name = "sliver"
+color = "#FFFFFF"
+
+[[line]]
+id = "sl-line"
+from = [0.0, 0.0]
+to = [7.0, 1.0]
+"##;
+        let cf: CfFile = toml::from_str(toml).unwrap();
+        let scene = render_layers("sliver", "m", &[("sliver".to_string(), cf)], 1600, &[]);
+        assert_eq!(scene.px_per_unit, 1600.0 / 9.0);
+    }
+
+    #[test]
+    fn render_scale_caps_tall_content() {
+        let toml = r##"
+[layer]
+name = "tall"
+color = "#FFFFFF"
+
+[[line]]
+id = "t-line"
+from = [0.0, 0.0]
+to = [2.0, 100.0]
+"##;
+        let cf: CfFile = toml::from_str(toml).unwrap();
+        let scene = render_layers("tall", "m", &[("tall".to_string(), cf)], 1600, &[]);
+        // World 4 x 102: uncapped height would be 40800, capped at 4096, so
+        // the height term binds and its `*` mutant is observable.
+        assert_eq!(scene.height_px, 4096.0);
+        assert_eq!(scene.px_per_unit, 4096.0 / 102.0);
     }
 }

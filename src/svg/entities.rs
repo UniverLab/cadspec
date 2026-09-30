@@ -215,4 +215,121 @@ mod tests {
         let rect = records.iter().find(|r| r.kind == "rect").unwrap();
         assert_eq!(rect.bbox, [1.0, 1.0, 4.0, 3.0]);
     }
+
+    fn kinds_fixture() -> CfFile {
+        let toml = r##"
+[layer]
+name = "kinds"
+
+[[line]]
+id = "k-line"
+from = [2.0, 3.0]
+to = [5.0, 7.0]
+
+[[polyline]]
+id = "k-pl"
+points = [[0.0, 0.0], [3.0, 1.0], [1.0, 4.0]]
+closed = false
+
+[[rect]]
+id = "k-rect"
+origin = [1.0, 1.0]
+width = 3.0
+height = 2.0
+
+[[circle]]
+id = "k-circle"
+center = [1.0, 1.0]
+radius = 2.0
+
+[[arc]]
+id = "k-arc"
+center = [0.0, 0.0]
+radius = 1.0
+from_angle = 30.0
+to_angle = 120.0
+
+[[text]]
+id = "k-text"
+position = [1.0, 2.0]
+content = "AB"
+size = 0.5
+
+[[point]]
+id = "k-point"
+position = [4.0, 4.0]
+
+[[dim]]
+id = "k-dim-a"
+from = [1.0, 1.0]
+to = [5.0, 4.0]
+
+[[dim]]
+id = "k-dim-b"
+from = [5.0, 1.0]
+to = [1.0, 4.0]
+
+[[polyline]]
+id = "k-boundary"
+points = [[0.0, 0.0], [2.0, 0.0], [2.0, 2.0], [0.0, 2.0]]
+closed = true
+
+[[hatch]]
+id = "k-hatch"
+boundary = "k-boundary"
+pattern = "ansi31"
+
+[[fill]]
+id = "k-fill"
+boundary = "k-boundary"
+"##;
+        toml::from_str(toml).unwrap()
+    }
+
+    fn bbox_of_kind(cf: &CfFile, kind: &str) -> [f64; 4] {
+        enumerate_entities(cf)
+            .into_iter()
+            .find(|r| r.kind == kind)
+            .unwrap()
+            .bbox
+    }
+
+    fn bboxes_of_kind(cf: &CfFile, kind: &str) -> Vec<[f64; 4]> {
+        enumerate_entities(cf)
+            .into_iter()
+            .filter(|r| r.kind == kind)
+            .map(|r| r.bbox)
+            .collect()
+    }
+
+    fn assert_close(actual: [f64; 4], expected: [f64; 4]) {
+        for (a, b) in actual.iter().zip(expected) {
+            assert!(
+                (a - b).abs() < 1e-9,
+                "bbox {actual:?} differs from {expected:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn bboxes_are_exact_per_kind() {
+        let cf = kinds_fixture();
+        assert_eq!(bbox_of_kind(&cf, "line"), [2.0, 3.0, 5.0, 7.0]);
+        assert_eq!(bbox_of_kind(&cf, "polyline"), [0.0, 0.0, 3.0, 4.0]);
+        assert_eq!(bbox_of_kind(&cf, "rect"), [1.0, 1.0, 4.0, 3.0]);
+        assert_eq!(bbox_of_kind(&cf, "circle"), [-1.0, -1.0, 3.0, 3.0]);
+        assert_eq!(bbox_of_kind(&cf, "point"), [3.95, 3.95, 4.05, 4.05]);
+        assert_eq!(bbox_of_kind(&cf, "text"), [1.0, 2.0, 1.6, 2.5]);
+        // 3-4-5 diagonals in opposite orientations: every offset corner is an
+        // extreme of its bbox, so each offset arithmetic mutant moves an edge.
+        let mut dims = bboxes_of_kind(&cf, "dim");
+        dims.sort_by(|a, b| a[1].partial_cmp(&b[1]).unwrap());
+        assert_eq!(dims.len(), 2);
+        assert_close(dims[0], [0.7, 0.6, 5.0, 4.0]);
+        assert_close(dims[1], [0.7, 1.0, 5.0, 4.4]);
+        assert_eq!(bbox_of_kind(&cf, "hatch"), [0.0, 0.0, 2.0, 2.0]);
+        assert_eq!(bbox_of_kind(&cf, "fill"), [0.0, 0.0, 2.0, 2.0]);
+        let arc = bbox_of_kind(&cf, "arc");
+        assert!(arc[0] < 0.0 && arc[2] <= 1.0 && arc[1] > 0.0 && arc[3] <= 1.0);
+    }
 }

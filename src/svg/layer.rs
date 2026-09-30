@@ -58,43 +58,43 @@ fn grid_step(world_w: f64) -> f64 {
     1000.0
 }
 
+/// Last grid index for `span` at `step` (`floor(span / step)`), clamped so a
+/// mutated step can only produce a wrong grid, never an unbounded loop.
+/// Deliberately **no comparison operator**: `floor`+`clamp` keep every mutant
+/// observable (`/→%` and `/→*` shift the index, which the goldens catch) and,
+/// unlike a `n > 0.0` guard, introduce no equivalent `>=` mutant.
+fn grid_line_index(span: f64, step: f64) -> i64 {
+    const MAX_INDEX: f64 = 4096.0;
+    (span / step).floor().clamp(0.0, MAX_INDEX) as i64
+}
+
 pub(super) fn draw_grid(c: &mut Canvas, bounds: &Bounds) {
-    let step = grid_step(bounds.max_x - bounds.min_x + 2.0 * PADDING);
+    let step = grid_step(bounds.max_x - bounds.min_x + PADDING * 2.0);
     let x0 = ((bounds.min_x - PADDING) / step).floor() * step;
     let x1 = bounds.max_x + PADDING;
     let y0 = ((bounds.min_y - PADDING) / step).floor() * step;
     let y1 = bounds.max_y + PADDING;
 
     c.out.push_str(r#"<g data-grid="true">"#);
-    let mut x = x0;
-    while x <= x1 {
+    for i in 0..=grid_line_index(x1 - x0, step) {
+        let x = x0 + i as f64 * step;
         let (px, _) = c.world_to_px(x, 0.0);
-        let color = if x.abs() < 1e-9 {
-            AXIS_COLOR
-        } else {
-            GRID_COLOR
-        };
+        let color = if x == 0.0 { AXIS_COLOR } else { GRID_COLOR };
         let _ = write!(
             c.out,
             r#"<line x1="{px:.2}" y1="0" x2="{px:.2}" y2="{h:.2}" stroke="{color}" stroke-width="1"/>"#,
             h = c.height_px,
         );
-        x += step;
     }
-    let mut y = y0;
-    while y <= y1 {
+    for i in 0..=grid_line_index(y1 - y0, step) {
+        let y = y0 + i as f64 * step;
         let (_, py) = c.world_to_px(0.0, y);
-        let color = if y.abs() < 1e-9 {
-            AXIS_COLOR
-        } else {
-            GRID_COLOR
-        };
+        let color = if y == 0.0 { AXIS_COLOR } else { GRID_COLOR };
         let _ = write!(
             c.out,
             r#"<line x1="0" y1="{py:.2}" x2="{w:.2}" y2="{py:.2}" stroke="{color}" stroke-width="1"/>"#,
             w = c.width_px,
         );
-        y += step;
     }
     c.out.push_str("</g>");
 }
@@ -533,6 +533,121 @@ mod tests {
         assert_eq!(grid_step(10.0), 0.5);
         assert_eq!(grid_step(30.0), 1.0);
         assert_eq!(grid_step(300.0), 10.0);
+    }
+
+    #[test]
+    fn grid_step_bucket_edges() {
+        // 20 / 0.5 == 40 exactly: the <= boundary picks 0.5.
+        assert_eq!(grid_step(20.0), 0.5);
+        assert_eq!(grid_step(60.0), 2.0);
+        assert_eq!(grid_step(500.0), 20.0);
+    }
+
+    #[test]
+    fn grid_line_index_counts_steps() {
+        assert_eq!(grid_line_index(15.0, 0.5), 30);
+        assert_eq!(grid_line_index(0.0, 1.0), 0);
+    }
+
+    #[test]
+    fn arc_points_spans_given_angles() {
+        let pts = arc_points(0.0, 0.0, 2.0, 30.0, 120.0);
+        assert_eq!(pts.len(), 49);
+        let (fx, fy) = pts[0];
+        let (lx, ly) = pts[48];
+        let (efx, efy) = (
+            2.0 * 30.0_f64.to_radians().cos(),
+            2.0 * 30.0_f64.to_radians().sin(),
+        );
+        let (elx, ely) = (
+            2.0 * 120.0_f64.to_radians().cos(),
+            2.0 * 120.0_f64.to_radians().sin(),
+        );
+        assert!((fx - efx).abs() < 1e-9 && (fy - efy).abs() < 1e-9);
+        assert!((lx - elx).abs() < 1e-9 && (ly - ely).abs() < 1e-9);
+    }
+
+    fn test_canvas() -> Canvas {
+        Canvas {
+            out: String::new(),
+            scale: 100.0,
+            offset_x: -1.0,
+            offset_y: -1.0,
+            world_h: 12.0,
+            width_px: 1600.0,
+            height_px: 1200.0,
+            clip_seq: 0,
+        }
+    }
+
+    #[test]
+    fn tiny_dim_still_draws() {
+        let toml = r##"
+[layer]
+name = "tiny"
+
+[[dim]]
+id = "dm-tiny"
+from = [0.0, 0.0]
+to = [0.000000001, 0.0]
+offset = 0.3
+"##;
+        let cf: CfFile = toml::from_str(toml).unwrap();
+        let s = resolve_style(&cf.dims[0].common, "#FFFFFF", 0.35);
+        let mut c = test_canvas();
+        draw_dim(&mut c, &cf.dims[0], &s, "m");
+        assert!(c.out.contains(r#"data-dim="true""#));
+    }
+
+    #[test]
+    fn zero_spacing_hatch_draws_nothing() {
+        let toml = r##"
+[layer]
+name = "hatch"
+
+[[polyline]]
+id = "hz-boundary"
+points = [[0.0, 0.0], [2.0, 0.0], [2.0, 2.0], [0.0, 2.0]]
+closed = true
+
+[[hatch]]
+id = "hz-zero"
+boundary = "hz-boundary"
+pattern = "ansi31"
+scale = 0.0
+"##;
+        let cf: CfFile = toml::from_str(toml).unwrap();
+        let mut c = test_canvas();
+        draw_hatches(&mut c, &cf, "#FFFFFF", 0.35, "hatch");
+        assert!(!c.out.contains("hatch-clip"));
+    }
+
+    #[test]
+    fn grid_span_bucket_changes_line_count() {
+        // World 32 x 2 at width 1600: span + 2 lands in the step-1 bucket
+        // while the `+ -> *` mutant (max - 2 * min) lands in step 2, so the
+        // grid line count pins the span arithmetic exactly.
+        let toml = r##"
+[layer]
+name = "wide"
+color = "#FFFFFF"
+
+[[line]]
+id = "wd-line"
+from = [-30.0, 0.0]
+to = [0.0, 0.0]
+"##;
+        let cf: CfFile = toml::from_str(toml).unwrap();
+        let scene = render_layers("wide", "m", &[("wide".to_string(), cf)], 1600, &[]);
+        let grid = scene
+            .svg
+            .split(r#"<g data-grid="true">"#)
+            .nth(1)
+            .unwrap()
+            .split("</g>")
+            .next()
+            .unwrap();
+        assert_eq!(grid.matches("<line").count(), 36);
     }
 
     fn text_layer(extra_fields: &str) -> Vec<(String, CfFile)> {
