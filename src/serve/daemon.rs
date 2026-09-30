@@ -160,3 +160,90 @@ pub fn serve_stop(project_dir: &Path, _port: u16) -> Result<()> {
         bail!("failed to stop process {pid}")
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    /// Unique temp dir per test; removed on drop even when an assert panics.
+    struct TempDir(PathBuf);
+
+    impl TempDir {
+        fn new(prefix: &str) -> Self {
+            static NEXT: AtomicUsize = AtomicUsize::new(0);
+            let dir = std::env::temp_dir().join(format!(
+                "{prefix}_{}_{}",
+                std::process::id(),
+                NEXT.fetch_add(1, Ordering::SeqCst)
+            ));
+            let _ = fs::remove_dir_all(&dir);
+            fs::create_dir_all(&dir).unwrap();
+            Self(dir)
+        }
+
+        fn path(&self) -> &Path {
+            &self.0
+        }
+    }
+
+    impl Drop for TempDir {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+
+    #[test]
+    fn runtime_and_log_paths_follow_the_project_dir() {
+        let base = Path::new("/x");
+        assert_eq!(runtime_dir(base), PathBuf::from("/x/.cadspec"));
+        assert_eq!(log_path(base), PathBuf::from("/x/.cadspec/serve.log"));
+    }
+
+    #[test]
+    fn process_alive_accepts_the_current_process() {
+        assert!(process_alive(std::process::id()));
+    }
+
+    #[test]
+    fn running_pid_needs_a_pid_file_for_a_live_process() {
+        let dir = TempDir::new("cadspec_daemon_pid");
+        // No pid file yet: nothing is running.
+        assert_eq!(running_pid(dir.path()), None);
+
+        // Our own pid in the file: reported as running.
+        fs::create_dir_all(runtime_dir(dir.path())).unwrap();
+        fs::write(pid_path(dir.path()), format!("{}\n", std::process::id())).unwrap();
+        assert_eq!(running_pid(dir.path()), Some(std::process::id()));
+    }
+
+    #[test]
+    fn wait_until_ready_requires_a_live_listener() {
+        // Listening port: ready promptly, well inside the 1s budget.
+        let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let port = listener.local_addr().unwrap().port();
+        assert!(wait_until_ready(port, Duration::from_secs(1)));
+        drop(listener);
+
+        // Same port with zero budget: the wait loop never runs, so this is
+        // false without attempting any connection (no other test's listener
+        // can make it flaky). It pins the `< deadline` guard: a `==`/`>`
+        // rewrite still returns false here, but the live-listener assert
+        // above then fails.
+        assert!(!wait_until_ready(port, Duration::ZERO));
+    }
+
+    #[test]
+    fn serve_daemon_fails_fast_without_project_toml() {
+        // No project.toml in here: parse_project errors before anything is
+        // bound, spawned, or written — the error path only.
+        let missing = TempDir::new("cadspec_daemon_missing");
+        let err = serve_daemon(missing.path(), 0, false)
+            .expect_err("a directory without project.toml must not start a daemon");
+        let msg = format!("{err:#}");
+        assert!(
+            msg.contains("project.toml"),
+            "error should mention project.toml: {msg}"
+        );
+    }
+}

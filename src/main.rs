@@ -343,3 +343,224 @@ fn resolve_project_dir(path: Option<PathBuf>) -> Result<PathBuf> {
     }
     Ok(dir)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::Path;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static DIR_SEQ: AtomicU64 = AtomicU64::new(0);
+
+    /// Unique, empty temp directory: `/tmp/<prefix>_<pid>_<seq>`.
+    fn unique_dir(prefix: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "{}_{}_{}",
+            prefix,
+            std::process::id(),
+            DIR_SEQ.fetch_add(1, Ordering::Relaxed)
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("create temp dir");
+        dir
+    }
+
+    /// A path that is guaranteed not to contain a project.toml.
+    fn missing_dir(prefix: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(prefix);
+        let _ = std::fs::remove_dir_all(&dir);
+        dir
+    }
+
+    /// Minimal valid project: one layer with a single line.
+    fn write_simple_project(dir: &Path, strict: bool) {
+        std::fs::write(
+            dir.join("project.toml"),
+            format!(
+                r#"[project]
+name = "t"
+units = "m"
+strict = {strict}
+
+[layers]
+main = {{ file = "main.cf", locked = false }}
+"#
+            ),
+        )
+        .expect("write project.toml");
+        std::fs::write(
+            dir.join("main.cf"),
+            r#"[layer]
+name = "main"
+
+[[line]]
+id = "l1"
+from = [0.0, 0.0]
+to = [1.0, 1.0]
+"#,
+        )
+        .expect("write main.cf");
+    }
+
+    /// Project with exactly one constraint violation: the child layer's bbox
+    /// (3,3 → 4,4) lies outside the parent layer's bbox (0,0 → 2,2).
+    fn write_violating_project(dir: &Path, strict: bool) {
+        std::fs::write(
+            dir.join("project.toml"),
+            format!(
+                r#"[project]
+name = "t"
+units = "m"
+strict = {strict}
+
+[layers]
+parent = {{ file = "parent.cf", locked = false }}
+child = {{ file = "child.cf", locked = false }}
+
+[constraints]
+child.parent = "parent"
+"#
+            ),
+        )
+        .expect("write project.toml");
+        std::fs::write(
+            dir.join("parent.cf"),
+            r#"[layer]
+name = "parent"
+
+[[rect]]
+id = "room-1"
+origin = [0.0, 0.0]
+width = 2.0
+height = 2.0
+"#,
+        )
+        .expect("write parent.cf");
+        std::fs::write(
+            dir.join("child.cf"),
+            r#"[layer]
+name = "child"
+
+[[rect]]
+id = "furn-1"
+origin = [3.0, 3.0]
+width = 1.0
+height = 1.0
+"#,
+        )
+        .expect("write child.cf");
+    }
+
+    #[test]
+    fn run_build_writes_dxf_output() {
+        let dir = unique_dir("cadspec_main_build");
+        write_simple_project(&dir, false);
+        let out = dir.join("out.dxf");
+
+        let result = run_build(Some(dir.clone()), None, Some(out.clone()), false);
+        assert!(result.is_ok(), "build should succeed: {:?}", result.err());
+        assert!(out.exists(), "output DXF file must be created");
+        let content = std::fs::read_to_string(&out).expect("read output DXF");
+        assert!(!content.is_empty(), "output DXF must not be empty");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn run_build_errors_on_missing_project_dir() {
+        let missing = missing_dir("cadspec_main_missing_build");
+        let result = run_build(Some(missing), None, None, false);
+        assert!(result.is_err(), "missing project dir must fail the build");
+    }
+
+    #[test]
+    fn run_check_strict_violation_fails_in_json_mode() {
+        let dir = unique_dir("cadspec_main_check_strict");
+        write_violating_project(&dir, true);
+
+        let result = run_check(Some(dir.clone()), true);
+        assert!(
+            result.is_err(),
+            "strict + violation must bail in json mode, got: {:?}",
+            result
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn run_check_non_strict_violation_passes_in_json_mode() {
+        let dir = unique_dir("cadspec_main_check_relaxed");
+        write_violating_project(&dir, false);
+
+        let result = run_check(Some(dir.clone()), true);
+        assert!(
+            result.is_ok(),
+            "non-strict violation must not bail in json mode: {:?}",
+            result.err()
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn run_check_strict_without_violations_passes_in_json_mode() {
+        let dir = unique_dir("cadspec_main_check_clean");
+        write_simple_project(&dir, true);
+
+        let result = run_check(Some(dir.clone()), true);
+        assert!(
+            result.is_ok(),
+            "strict project with no violations must pass: {:?}",
+            result.err()
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn run_check_errors_on_missing_project_dir() {
+        let missing = missing_dir("cadspec_main_missing_check");
+        assert!(
+            run_check(Some(missing.clone()), false).is_err(),
+            "missing dir must fail check (non-json)"
+        );
+        assert!(
+            run_check(Some(missing), true).is_err(),
+            "missing dir must fail check (json)"
+        );
+    }
+
+    #[test]
+    fn run_layers_errors_on_missing_project_dir() {
+        let missing = missing_dir("cadspec_main_missing_layers");
+        let result = run_layers(Some(missing), false);
+        assert!(result.is_err(), "missing dir must fail layers listing");
+    }
+
+    #[test]
+    fn run_layers_lists_project_layers() {
+        let dir = unique_dir("cadspec_main_layers");
+        write_simple_project(&dir, false);
+
+        assert!(
+            run_layers(Some(dir.clone()), false).is_ok(),
+            "listing layers of a valid project must succeed"
+        );
+        assert!(
+            run_layers(Some(dir.clone()), true).is_ok(),
+            "json layers report of a valid project must succeed"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn run_serve_errors_on_missing_project_dir_without_starting_server() {
+        // stop = true and a missing dir: resolve_project_dir fails first, so
+        // no server (foreground or daemon) can ever be spawned here.
+        let missing = missing_dir("cadspec_main_missing_serve");
+        let result = run_serve(Some(missing), 43999, false, false, true);
+        assert!(result.is_err(), "missing dir must fail serve");
+    }
+}

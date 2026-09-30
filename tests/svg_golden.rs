@@ -129,6 +129,11 @@ fn golden_grid_large() {
 }
 
 #[test]
+fn golden_grid_straddle() {
+    case("grid-straddle", fixture("grid-straddle"));
+}
+
+#[test]
 fn golden_empty() {
     case("empty", fixture("empty"));
 }

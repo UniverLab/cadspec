@@ -89,3 +89,104 @@ fn mark_text_companion(
         keep[i] = false;
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::importer::shapes::StyleAttrs;
+
+    fn dim(from: [f64; 2], to: [f64; 2], offset: f64) -> Imported {
+        Imported {
+            shape: Shape::Dim { from, to, offset },
+            style: StyleAttrs::default(),
+        }
+    }
+
+    fn line(from: [f64; 2], to: [f64; 2]) -> Imported {
+        Imported {
+            shape: Shape::Line { from, to },
+            style: StyleAttrs::default(),
+        }
+    }
+
+    #[test]
+    fn dim_offset_projects_the_insertion_onto_the_meridian() {
+        // dx=3, dy=3, len=sqrt(18), normal=(-√2/2, √2/2), mid=(2.5, 3.5):
+        // (7-2.5)*nx + (3-3.5)*ny = -3.535533905932738
+        let value = dim_offset([1.0, 2.0], [4.0, 5.0], [7.0, 3.0]).unwrap();
+        assert!(
+            (value - (-3.535533905932738)).abs() < 1e-12,
+            "unexpected offset {value}"
+        );
+        // Plain horizontal case: normal (0, 1), mid (1, 0) → offset 1.
+        assert_eq!(dim_offset([0.0, 0.0], [2.0, 0.0], [0.0, 1.0]), Some(1.0));
+    }
+
+    #[test]
+    fn dim_offset_rejects_a_zero_length_dimension() {
+        assert_eq!(dim_offset([0.0, 0.0], [0.0, 0.0], [1.0, 1.0]), None);
+    }
+
+    #[test]
+    fn dim_offset_accepts_a_dimension_of_exactly_one_nanometre() {
+        // len computes to exactly 1e-9 here: still a measurable dimension, so
+        // the length guard must not swallow it.
+        let value = dim_offset([0.0, 0.0], [1e-9, 0.0], [0.0, 1.0]);
+        assert_eq!(value, Some(1.0));
+    }
+
+    #[test]
+    fn remove_dim_companions_drops_the_generated_graphics() {
+        // Dim from (1,2) to (4,6) offset 1: normal = (-0.8, 0.6),
+        // a = (0.2, 2.6), b = (3.2, 6.6).
+        let mut entities = vec![
+            dim([1.0, 2.0], [4.0, 6.0], 1.0),
+            line([1.0, 2.0], [0.2, 2.6]),
+            line([4.0, 6.0], [3.2, 6.6]),
+            line([0.2, 2.6], [3.2, 6.6]),
+        ];
+        remove_dim_companions(&mut entities);
+        assert_eq!(entities.len(), 1, "only the [[dim]] entity must remain");
+        assert!(matches!(entities[0].shape, Shape::Dim { .. }));
+    }
+
+    #[test]
+    fn remove_dim_companions_keeps_lines_outside_the_tolerance_on_x() {
+        // Dim (0,0)→(2,0) offset 1 has companions at (0,0)→(0,1); this line's
+        // start is exactly TOL (1e-6) away on x, so it must NOT be swallowed.
+        let mut entities = vec![
+            dim([0.0, 0.0], [2.0, 0.0], 1.0),
+            line([1e-6, 0.0], [0.0, 1.0]),
+        ];
+        remove_dim_companions(&mut entities);
+        assert_eq!(entities.len(), 2, "a line 1e-6 off on x is not a companion");
+    }
+
+    #[test]
+    fn remove_dim_companions_keeps_lines_outside_the_tolerance_on_y() {
+        let mut entities = vec![
+            dim([0.0, 0.0], [2.0, 0.0], 1.0),
+            line([0.0, 1e-6], [0.0, 1.0]),
+        ];
+        remove_dim_companions(&mut entities);
+        assert_eq!(entities.len(), 2, "a line 1e-6 off on y is not a companion");
+    }
+
+    #[test]
+    fn remove_dim_companions_cleans_a_dimension_of_exactly_one_nanometre() {
+        // len == 1e-9 exactly: still measurable, so its graphics (a=(0,1),
+        // b=(1e-9,1)) must be removed like any other dimension's.
+        let mut entities = vec![
+            dim([0.0, 0.0], [1e-9, 0.0], 1.0),
+            line([0.0, 0.0], [0.0, 1.0]),
+            line([1e-9, 0.0], [1e-9, 1.0]),
+            line([0.0, 1.0], [1e-9, 1.0]),
+        ];
+        remove_dim_companions(&mut entities);
+        assert_eq!(
+            entities.len(),
+            1,
+            "the 1nm dimension's companion graphics must be removed"
+        );
+    }
+}

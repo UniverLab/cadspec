@@ -287,4 +287,231 @@ to = [1.0, 0.0]
             issues[0]
         );
     }
+
+    // ── validate_constraints (whole-rule entry point) ─────────────────────
+
+    fn project(toml: &str) -> ProjectFile {
+        toml::from_str(toml).unwrap()
+    }
+
+    fn child_inside_parent_project(constraint: &str) -> ProjectFile {
+        project(&format!(
+            r#"[project]
+name = "t"
+
+[layers]
+child = {{ file = "child.cf" }}
+parent = {{ file = "parent.cf" }}
+
+[constraints]
+{constraint}
+"#
+        ))
+    }
+
+    fn inside_layers() -> IndexMap<String, CfFile> {
+        let mut layers: IndexMap<String, CfFile> = IndexMap::new();
+        layers.insert(
+            "child".to_string(),
+            layer(
+                r#"[layer]
+name = "child"
+
+[[line]]
+from = [0.0, 0.0]
+to = [1.0, 1.0]
+"#,
+            ),
+        );
+        layers.insert(
+            "parent".to_string(),
+            layer(
+                r#"[layer]
+name = "parent"
+
+[[line]]
+from = [-1.0, -1.0]
+to = [3.0, 3.0]
+"#,
+            ),
+        );
+        layers
+    }
+
+    #[test]
+    fn parent_constraint_passes_when_the_child_bbox_fits() {
+        let proj = child_inside_parent_project(r#"child = { parent = "parent" }"#);
+        let issues = validate_constraints(&proj, &inside_layers());
+        assert!(issues.is_empty(), "{issues:?}");
+    }
+
+    #[test]
+    fn parent_constraint_reports_a_child_outside_its_parent() {
+        let proj = child_inside_parent_project(r#"child = { parent = "parent" }"#);
+        let mut layers = inside_layers();
+        layers.insert(
+            "parent".to_string(),
+            layer(
+                r#"[layer]
+name = "parent"
+
+[[line]]
+from = [5.0, 5.0]
+to = [6.0, 6.0]
+"#,
+            ),
+        );
+        let issues = validate_constraints(&proj, &layers);
+        assert_eq!(issues.len(), 1, "{issues:?}");
+        assert!(
+            issues[0].contains("violates parent='parent'"),
+            "unexpected issue: {}",
+            issues[0]
+        );
+    }
+
+    #[test]
+    fn belongs_to_constraint_is_validated_when_both_layers_exist() {
+        let proj = child_inside_parent_project(r#"child = { belongs_to = "parent" }"#);
+        let mut layers: IndexMap<String, CfFile> = IndexMap::new();
+        layers.insert(
+            "child".to_string(),
+            layer(
+                r#"[layer]
+name = "child"
+
+[[line]]
+id = "ln-1"
+from = [0.0, 0.0]
+to = [1.0, 0.0]
+belongs_to = "missing"
+"#,
+            ),
+        );
+        layers.insert(
+            "parent".to_string(),
+            layer(
+                r#"[layer]
+name = "parent"
+
+[[line]]
+id = "pid"
+from = [0.0, 0.0]
+to = [1.0, 0.0]
+"#,
+            ),
+        );
+        let issues = validate_constraints(&proj, &layers);
+        assert_eq!(issues.len(), 1, "{issues:?}");
+        assert!(
+            issues[0].contains("does not exist in parent layer 'parent'"),
+            "unexpected issue: {}",
+            issues[0]
+        );
+    }
+
+    #[test]
+    fn belongs_to_constraint_passes_with_a_reference_defined_in_the_parent() {
+        let proj = child_inside_parent_project(r#"child = { belongs_to = "parent" }"#);
+        let mut layers: IndexMap<String, CfFile> = IndexMap::new();
+        layers.insert(
+            "child".to_string(),
+            layer(
+                r#"[layer]
+name = "child"
+
+[[line]]
+id = "ln-1"
+from = [0.0, 0.0]
+to = [1.0, 0.0]
+belongs_to = "pid"
+"#,
+            ),
+        );
+        layers.insert(
+            "parent".to_string(),
+            layer(
+                r#"[layer]
+name = "parent"
+
+[[line]]
+id = "pid"
+from = [0.0, 0.0]
+to = [1.0, 0.0]
+"#,
+            ),
+        );
+        let issues = validate_constraints(&proj, &layers);
+        assert!(issues.is_empty(), "{issues:?}");
+    }
+
+    #[test]
+    fn belongs_to_constraint_stays_silent_for_a_layer_without_primitives() {
+        let proj = child_inside_parent_project(r#"child = { belongs_to = "parent" }"#);
+        let mut layers: IndexMap<String, CfFile> = IndexMap::new();
+        layers.insert(
+            "child".to_string(),
+            layer(
+                r#"[layer]
+name = "child"
+"#,
+            ),
+        );
+        layers.insert(
+            "parent".to_string(),
+            layer(
+                r#"[layer]
+name = "parent"
+
+[[line]]
+id = "pid"
+from = [0.0, 0.0]
+to = [1.0, 0.0]
+"#,
+            ),
+        );
+        let issues = validate_constraints(&proj, &layers);
+        assert!(issues.is_empty(), "{issues:?}");
+    }
+
+    #[test]
+    fn spatial_dependency_needs_both_layers_to_exist() {
+        let proj =
+            child_inside_parent_project("\"pisos \u{2192} azotea\" = \"spatial_dependency\"");
+        // Both layers registered → warning-only registration message.
+        let mut layers: IndexMap<String, CfFile> = IndexMap::new();
+        layers.insert(
+            "pisos".to_string(),
+            layer(
+                r#"[layer]
+name = "pisos"
+"#,
+            ),
+        );
+        layers.insert(
+            "azotea".to_string(),
+            layer(
+                r#"[layer]
+name = "azotea"
+"#,
+            ),
+        );
+        let issues = validate_constraints(&proj, &layers);
+        assert_eq!(issues.len(), 1, "{issues:?}");
+        assert!(
+            issues[0].contains("registered; dynamic movement tracking"),
+            "unexpected issue: {}",
+            issues[0]
+        );
+
+        // One side missing → invalid, never the registration message.
+        layers.shift_remove("azotea");
+        let issues = validate_constraints(&proj, &layers);
+        assert_eq!(issues.len(), 1, "{issues:?}");
+        assert!(
+            issues[0].contains("Invalid spatial_dependency 'pisos' -> 'azotea'"),
+            "unexpected issue: {}",
+            issues[0]
+        );
+    }
 }

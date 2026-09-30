@@ -227,6 +227,7 @@ fn is_relevant(event: &Event) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::Instant;
 
     #[test]
     fn relevant_events_filter_by_extension() {
@@ -241,5 +242,129 @@ mod tests {
         assert!(!is_relevant(&event));
         event.paths = vec![PathBuf::from("/p/preview.svg")];
         assert!(!is_relevant(&event));
+    }
+
+    #[test]
+    fn scene_gltf_returns_a_nonempty_gltf_document() {
+        let gltf =
+            scene_gltf(Path::new("examples/vivienda")).expect("vivienda should render to glTF");
+        // Kills a `Ok(String::new())` rewrite: an empty document has neither
+        // the JSON payload nor the glTF "asset" marker.
+        assert!(!gltf.is_empty(), "gltf: {}", gltf);
+        assert!(gltf.contains("\"asset\""), "gltf head: {}", gltf);
+    }
+
+    #[test]
+    fn render_named_plano_renders_only_declared_sheets() {
+        let dir = std::env::temp_dir().join(format!("cadspec_serve_plano_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        // Copy examples/vivienda's sources (project.toml + *.cf) only.
+        for entry in std::fs::read_dir("examples/vivienda").unwrap() {
+            let path = entry.unwrap().path();
+            let name = path.file_name().unwrap().to_os_string();
+            let is_source = name == "project.toml" || path.extension().is_some_and(|e| e == "cf");
+            if path.is_file() && is_source {
+                std::fs::copy(&path, dir.join(&name)).unwrap();
+            }
+        }
+        // examples/vivienda declares no [[plano]]; append one so the name
+        // lookup has a sheet to find.
+        let mut project_toml = std::fs::read_to_string(dir.join("project.toml")).unwrap();
+        project_toml.push_str(
+            r#"
+[[plano]]
+name = "P-01"
+view = "plan"
+size = [420.0, 297.0]
+scale = "1:50"
+title = "X"
+"#,
+        );
+        std::fs::write(dir.join("project.toml"), project_toml).unwrap();
+
+        let svg = render_named_plano(&dir, "P-01").expect("declared plano renders");
+        assert!(svg.contains("<svg"), "svg len: {}", svg.len());
+
+        // Unknown names are an error (an `Ok(String::new())` rewrite would
+        // turn this into `Ok("")`, and an inverted name comparison would
+        // render P-01 instead of failing).
+        assert!(render_named_plano(&dir, "nope").is_err());
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn spawn_watcher_bumps_version_only_on_relevant_changes() {
+        let dir = std::env::temp_dir().join(format!("cadspec_serve_watch_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("project.toml"),
+            "[project]\nname = \"Watch Test\"\n\n[layers]\nmuros = { file = \"muros.cf\" }\n",
+        )
+        .unwrap();
+        let cf_path = dir.join("muros.cf");
+        std::fs::write(
+            &cf_path,
+            "[layer]\nname = \"muros\"\n\n[[line]]\nid = \"ln-1\"\nfrom = [0.0, 0.0]\nto = [1.0, 0.0]\n",
+        )
+        .unwrap();
+
+        // Shared state built exactly like `serve_project` does.
+        let state: Shared = Arc::new(Live {
+            state: Mutex::new(LiveState {
+                svg: Arc::new(String::new()),
+                svg3d: Arc::new(String::new()),
+                error: None,
+                version: 0,
+                project_name: "Watch Test".to_string(),
+                layers: Vec::new(),
+                planos: Vec::new(),
+            }),
+            changed: Condvar::new(),
+            project_dir: dir.clone(),
+        });
+
+        spawn_watcher(dir.clone(), Arc::clone(&state)).unwrap();
+        // Give the watcher a moment to register before touching files.
+        std::thread::sleep(Duration::from_millis(100));
+
+        // Phase 1 — an irrelevant file (*.txt) must NOT trigger a rebuild.
+        // If the relevance guard is inverted, this write bumps the version
+        // and the assertion below fails after a fixed, bounded sleep.
+        std::fs::write(dir.join("notes.txt"), "scratch").unwrap();
+        std::thread::sleep(Duration::from_millis(700));
+        let version_after_irrelevant = state.state.lock().unwrap().version;
+        assert_eq!(
+            version_after_irrelevant, 0,
+            "writing a non-.cf/.toml file must not rebuild, version is {}",
+            version_after_irrelevant
+        );
+
+        // Phase 2 — a real .cf change must bump the version, within a
+        // bounded poll: if the watcher never fires, the loop ends at the
+        // deadline and the assertion FAILS instead of hanging.
+        std::fs::write(
+            &cf_path,
+            "[layer]\nname = \"muros\"\n\n[[line]]\nid = \"ln-1\"\nfrom = [0.0, 0.0]\nto = [2.0, 0.0]\n",
+        )
+        .unwrap();
+        let deadline = Instant::now() + Duration::from_millis(4000);
+        let mut version = version_after_irrelevant;
+        while Instant::now() < deadline {
+            version = state.state.lock().unwrap().version;
+            if version > version_after_irrelevant {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(
+            version > version_after_irrelevant,
+            "watcher never rebuilt on a .cf change, version stayed {}",
+            version
+        );
     }
 }

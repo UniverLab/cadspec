@@ -538,4 +538,180 @@ offset = [3.0, 0.0]
         assert_eq!(out.hatches[1].boundary.as_deref(), Some("zona@1"));
         assert_eq!(out.polylines[1].points[0], [3.0, 0.0]);
     }
+
+    #[test]
+    fn linear_array_copies_circles_with_shifted_centers() {
+        let cf = parse(
+            r#"
+[[circle]]
+id = "c"
+center = [1.0, 1.0]
+radius = 0.5
+
+[[array]]
+target = "c"
+mode = "linear"
+count = 3
+offset = [2.0, 0.0]
+"#,
+        );
+        let out = expand_cf(&cf);
+        assert_eq!(out.circles.len(), 3, "both circle copies must be created");
+        assert_eq!(out.circles[1].common.id.as_deref(), Some("c@1"));
+        assert_eq!(out.circles[2].common.id.as_deref(), Some("c@2"));
+        assert_eq!(out.circles[1].center, [3.0, 1.0]);
+        assert_eq!(out.circles[2].center, [5.0, 1.0]);
+        assert_eq!(out.circles[2].radius, 0.5);
+    }
+
+    #[test]
+    fn linear_array_copies_texts_moving_anchor() {
+        let cf = parse(
+            r#"
+[[text]]
+id = "t"
+position = [0.0, 0.0]
+content = "X"
+size = 0.3
+
+[[array]]
+target = "t"
+mode = "linear"
+count = 3
+offset = [2.0, 1.0]
+"#,
+        );
+        let out = expand_cf(&cf);
+        assert_eq!(out.texts.len(), 3, "both text copies must be created");
+        assert_eq!(out.texts[2].common.id.as_deref(), Some("t@2"));
+        assert_eq!(out.texts[2].position, [4.0, 2.0]);
+        assert_eq!(out.texts[2].content, "X");
+    }
+
+    #[test]
+    fn linear_array_copies_dims_moving_endpoints() {
+        let cf = parse(
+            r#"
+[[dim]]
+id = "d"
+type = "linear"
+from = [0.0, 0.0]
+to = [2.0, 0.0]
+offset = 0.5
+
+[[array]]
+target = "d"
+mode = "linear"
+count = 3
+offset = [2.0, 0.0]
+"#,
+        );
+        let out = expand_cf(&cf);
+        assert_eq!(out.dims.len(), 3, "both dim copies must be created");
+        assert_eq!(out.dims[2].common.id.as_deref(), Some("d@2"));
+        assert_eq!(out.dims[2].from, [4.0, 0.0]);
+        assert_eq!(out.dims[2].to, [6.0, 0.0]);
+        assert_eq!(out.dims[2].offset, 0.5);
+    }
+
+    #[test]
+    fn linear_array_copies_fill_points_exactly() {
+        let cf = parse(
+            r#"
+[[fill]]
+id = "f"
+points = [[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]]
+
+[[array]]
+target = "f"
+mode = "linear"
+count = 3
+offset = [2.0, 0.0]
+"#,
+        );
+        let out = expand_cf(&cf);
+        assert_eq!(out.fills.len(), 3, "both fill copies must be created");
+        let copy = &out.fills[2];
+        assert_eq!(copy.common.id.as_deref(), Some("f@2"));
+        let points = copy.points.as_ref().expect("fill keeps its points");
+        assert_eq!(points.len(), 3);
+        assert_eq!(points[0], [4.0, 0.0]);
+        assert_eq!(points[1], [5.0, 0.0]);
+        assert_eq!(points[2], [4.0, 1.0]);
+    }
+
+    #[test]
+    fn fill_copy_keeps_boundary_when_boundary_not_targeted() {
+        // The array targets only the fill; the boundary polyline "zone" is
+        // NOT copied, so the fill copy must keep referencing "zone" itself.
+        let cf = parse(
+            r#"
+[[polyline]]
+id = "zone"
+points = [[0.0, 0.0], [4.0, 0.0], [4.0, 3.0], [0.0, 3.0]]
+closed = true
+
+[[fill]]
+id = "fl"
+boundary = "zone"
+points = [[0.0, 0.0], [4.0, 0.0], [4.0, 3.0]]
+
+[[array]]
+target = "fl"
+mode = "linear"
+count = 2
+offset = [3.0, 0.0]
+"#,
+        );
+        let out = expand_cf(&cf);
+        assert_eq!(out.fills.len(), 2);
+        assert_eq!(out.fills[1].common.id.as_deref(), Some("fl@1"));
+        assert_eq!(
+            out.fills[1].boundary.as_deref(),
+            Some("zone"),
+            "boundary not in targets must stay unsuffixed"
+        );
+        assert_eq!(out.polylines.len(), 1, "untargeted boundary is not copied");
+    }
+
+    #[test]
+    fn fill_copy_retargets_boundary_when_boundary_copied_too() {
+        // Both the fill and its boundary are targeted: the copy must point
+        // at the copied boundary id.
+        let cf = parse(
+            r#"
+[[polyline]]
+id = "zone"
+points = [[0.0, 0.0], [4.0, 0.0], [4.0, 3.0], [0.0, 3.0]]
+closed = true
+
+[[fill]]
+id = "fl"
+boundary = "zone"
+points = [[0.0, 0.0], [4.0, 0.0], [4.0, 3.0]]
+
+[[array]]
+targets = ["fl", "zone"]
+mode = "linear"
+count = 2
+offset = [3.0, 0.0]
+"#,
+        );
+        let out = expand_cf(&cf);
+        assert_eq!(out.fills.len(), 2);
+        assert_eq!(out.polylines.len(), 2);
+        assert_eq!(out.polylines[1].common.id.as_deref(), Some("zone@1"));
+        assert_eq!(out.fills[1].boundary.as_deref(), Some("zone@1"));
+    }
+
+    #[test]
+    fn transform_points_translates_some_and_keeps_none() {
+        let mut pts = Some(vec![[0.0, 0.0], [1.0, 2.0]]);
+        transform_points(&mut pts, &PointOp::Translate { dx: 3.0, dy: -1.0 });
+        assert_eq!(pts, Some(vec![[3.0, -1.0], [4.0, 1.0]]));
+
+        let mut none: Option<Vec<[f64; 2]>> = None;
+        transform_points(&mut none, &PointOp::Translate { dx: 3.0, dy: -1.0 });
+        assert_eq!(none, None, "None points stay None");
+    }
 }

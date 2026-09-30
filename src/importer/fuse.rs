@@ -78,7 +78,14 @@ pub(super) fn fuse_solids(entities: &mut Vec<Imported>) {
     // Union-find over fills, joined when they share an edge.
     let mut parent: Vec<usize> = (0..fill_positions.len()).collect();
     fn find(parent: &mut [usize], mut x: usize) -> usize {
-        while parent[x] != x {
+        // Bounded walk: the forest has parent.len() nodes and no cycles, so the
+        // root is always reached within parent.len() steps (same result as a
+        // `while parent[x] != x` walk, whose mutated operator could otherwise
+        // spin forever).
+        for _ in 0..parent.len() {
+            if parent[x] == x {
+                break;
+            }
             parent[x] = parent[parent[x]];
             x = parent[x];
         }
@@ -281,5 +288,153 @@ mod tests {
         fuse_solids(&mut entities);
         assert_eq!(entities.len(), 1);
         assert_eq!(ring_of(&entities[0]).len(), 3);
+    }
+
+    // ── solid_ring ────────────────────────────────────────────────────────
+
+    fn solid(
+        first: (f64, f64),
+        second: (f64, f64),
+        third: (f64, f64),
+        fourth: (f64, f64),
+    ) -> dxf::entities::Solid {
+        dxf::entities::Solid::new(
+            dxf::Point::new(first.0, first.1, 0.0),
+            dxf::Point::new(second.0, second.1, 0.0),
+            dxf::Point::new(third.0, third.1, 0.0),
+            dxf::Point::new(fourth.0, fourth.1, 0.0),
+        )
+    }
+
+    #[test]
+    fn solid_ring_recovers_the_four_corners_in_render_order() {
+        // Render order is first → second → fourth → third; every corner is
+        // distinct, so all four survive in exactly that order.
+        let e = solid((0.0, 0.0), (2.0, 0.0), (2.0, 2.0), (0.0, 2.0));
+        assert_eq!(
+            solid_ring(&e),
+            vec![[0.0, 0.0], [2.0, 0.0], [0.0, 2.0], [2.0, 2.0]]
+        );
+    }
+
+    #[test]
+    fn solid_ring_collapses_the_repeated_triangle_corner() {
+        // The writer emits triangles with fourth == third, which must collapse
+        // to the three real corners.
+        let e = solid((0.0, 0.0), (2.0, 0.0), (2.0, 2.0), (2.0, 2.0));
+        assert_eq!(solid_ring(&e), vec![[0.0, 0.0], [2.0, 0.0], [2.0, 2.0]]);
+    }
+
+    #[test]
+    fn solid_ring_drops_a_closing_duplicate_of_the_first_corner() {
+        // Raw order is [first, second, fourth, third]; a third corner equal to
+        // the first repeats the ring's start and must be popped by the closing
+        // rule. The neighbours stay pairwise distinct so only that rule
+        // applies (no in-loop collapse can hide the popped point).
+        let e = solid((0.0, 0.0), (3.0, 0.0), (0.0, 0.0), (1.0, 4.0));
+        assert_eq!(solid_ring(&e), vec![[0.0, 0.0], [3.0, 0.0], [1.0, 4.0]]);
+    }
+
+    #[test]
+    fn solid_ring_keeps_a_single_point_ring_from_collapsing() {
+        // All four raw points equal: the ring is one point, and the closing
+        // duplicate pop must not fire (that would empty the ring).
+        let e = solid((1.0, 1.0), (1.0, 1.0), (1.0, 1.0), (1.0, 1.0));
+        assert_eq!(solid_ring(&e), vec![[1.0, 1.0]]);
+    }
+
+    // ── pt_key / pts_eq / edge_key ────────────────────────────────────────
+
+    #[test]
+    fn pt_key_quantizes_coordinates_to_micro_units() {
+        assert_eq!(pt_key([1.0, 2.0]), (1_000_000, 2_000_000));
+        assert_eq!(pt_key([3.5, -4.25]), (3_500_000, -4_250_000));
+    }
+
+    #[test]
+    fn pts_eq_treats_points_within_the_tolerance_as_equal() {
+        assert!(pts_eq([0.0, 0.0], [0.0, 0.0]));
+        assert!(pts_eq([1.5, 2.5], [1.5, 2.5]));
+        // 1e-7 is an order of magnitude below the 1e-6 tolerance.
+        assert!(pts_eq([1.5, 2.5], [1.5 + 1e-7, 2.5]));
+    }
+
+    #[test]
+    fn pts_eq_rejects_points_beyond_the_tolerance() {
+        // Differs only in y, so both axis checks must hold: a `&&` relaxed to
+        // `||`, or an unconditional `true`, would call these equal.
+        assert!(!pts_eq([0.0, 0.0], [0.0, 1.0]));
+        assert!(!pts_eq([1.0, 1.0], [2.0, 1.0]));
+    }
+
+    #[test]
+    fn pts_eq_rejects_a_difference_exactly_at_the_tolerance() {
+        // 0.0 - 1e-6 is exact in f64, so the compared magnitude is exactly the
+        // 1e-6 tolerance and must stay strictly below it.
+        assert!(!pts_eq([0.0, 0.0], [0.0, 1e-6]));
+    }
+
+    #[test]
+    fn edge_key_canonicalizes_the_endpoint_order() {
+        assert_eq!(edge_key((1, 2), (3, 4)), ((1, 2), (3, 4)));
+        assert_eq!(edge_key((3, 4), (1, 2)), ((1, 2), (3, 4)));
+    }
+
+    // ── merge_rings / fuse_solids ─────────────────────────────────────────
+
+    #[test]
+    fn merge_rings_stitches_a_single_triangle_ring() {
+        // Three boundary edges is the smallest acceptable loop.
+        let t: &[[f64; 2]] = &[[0.0, 0.0], [2.0, 0.0], [0.0, 2.0]];
+        let ring = merge_rings(&[t]).expect("a lone triangle is a clean loop");
+        assert_eq!(ring.len(), 3);
+    }
+
+    #[test]
+    fn fuse_solids_merges_exactly_two_adjacent_fills() {
+        let mut entities = vec![
+            fill(vec![[0.0, 0.0], [2.0, 0.0], [2.0, 2.0]]),
+            fill(vec![[0.0, 0.0], [2.0, 2.0], [0.0, 2.0]]),
+        ];
+        fuse_solids(&mut entities);
+        let fills: Vec<&Imported> = entities
+            .iter()
+            .filter(|e| matches!(e.shape, Shape::Fill { .. }))
+            .collect();
+        assert_eq!(
+            fills.len(),
+            1,
+            "exactly two adjacent fills must fuse into one region"
+        );
+        assert_eq!(
+            ring_of(fills[0]).len(),
+            4,
+            "the shared diagonal is dropped, leaving the 4-gon"
+        );
+    }
+
+    #[test]
+    fn fuse_solids_fuses_each_adjacent_pair_independently() {
+        let mut entities = vec![
+            // Region A: two triangles tiling rect [0,0]-[2,2].
+            fill(vec![[0.0, 0.0], [2.0, 0.0], [2.0, 2.0]]),
+            fill(vec![[0.0, 0.0], [2.0, 2.0], [0.0, 2.0]]),
+            // Region B: two triangles tiling rect [10,10]-[12,12].
+            fill(vec![[10.0, 10.0], [12.0, 10.0], [12.0, 12.0]]),
+            fill(vec![[10.0, 10.0], [12.0, 12.0], [10.0, 12.0]]),
+        ];
+        fuse_solids(&mut entities);
+        let fills: Vec<&Imported> = entities
+            .iter()
+            .filter(|e| matches!(e.shape, Shape::Fill { .. }))
+            .collect();
+        assert_eq!(
+            fills.len(),
+            2,
+            "each adjacent pair fuses on its own; the two regions stay apart"
+        );
+        let mut lens: Vec<usize> = fills.iter().map(|e| ring_of(e).len()).collect();
+        lens.sort_unstable();
+        assert_eq!(lens, vec![4, 4], "both fused regions are 4-gons");
     }
 }

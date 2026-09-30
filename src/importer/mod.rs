@@ -403,6 +403,346 @@ fn collect_layer_names_from_layer_table(content: &str) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use dxf::entities::{Arc, Circle, Entity, Line, LwPolyline, ModelPoint, Solid};
+    use dxf::{LwPolylineVertex, Point};
+
+    /// Unique-per-run temp directory (under `/tmp/cadspec_importer_*`) that
+    /// removes itself on drop, so no test leaves files behind.
+    struct TempDir(PathBuf);
+
+    impl TempDir {
+        fn new(tag: &str) -> Self {
+            let stamp = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0);
+            let path = std::env::temp_dir().join(format!(
+                "cadspec_importer_{}_{}_{}",
+                tag,
+                std::process::id(),
+                stamp
+            ));
+            let _ = fs::remove_dir_all(&path);
+            fs::create_dir_all(&path).expect("temp dir must be creatable");
+            Self(path)
+        }
+    }
+
+    impl Drop for TempDir {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+
+    impl AsRef<Path> for TempDir {
+        fn as_ref(&self) -> &Path {
+            &self.0
+        }
+    }
+
+    fn line_entity(layer: &str, p1: (f64, f64), p2: (f64, f64)) -> Entity {
+        let mut entity = Entity::new(EntityType::Line(Line::new(
+            Point::new(p1.0, p1.1, 0.0),
+            Point::new(p2.0, p2.1, 0.0),
+        )));
+        entity.common.layer = layer.to_string();
+        entity
+    }
+
+    fn corner_present(points: &[[f64; 2]], corner: [f64; 2]) -> bool {
+        points
+            .iter()
+            .any(|p| (p[0] - corner[0]).abs() < 1e-9 && (p[1] - corner[1]).abs() < 1e-9)
+    }
+
+    #[test]
+    fn collect_drawing_layers_keeps_only_the_filtered_layer() {
+        let mut drawing = Drawing::new();
+        drawing.add_entity(line_entity("Wall", (0.0, 0.0), (1.0, 1.0)));
+        drawing.add_entity(line_entity("Door", (2.0, 2.0), (3.0, 3.0)));
+
+        let mut layers: BTreeMap<String, LayerFile> = BTreeMap::new();
+        let mut layer_colors: BTreeMap<String, String> = BTreeMap::new();
+        let mut unsupported = 0usize;
+        collect_drawing_layers(
+            &drawing,
+            Some("Wall"),
+            &mut layers,
+            &mut layer_colors,
+            &mut unsupported,
+        );
+
+        let keys: Vec<&str> = layers.keys().map(String::as_str).collect();
+        assert_eq!(
+            keys,
+            vec!["Wall"],
+            "only entities on the filtered layer are collected"
+        );
+        assert_eq!(layers["Wall"].entities.len(), 1);
+        assert_eq!(unsupported, 0);
+    }
+
+    #[test]
+    fn classify_entity_converts_each_supported_type() {
+        let mut unsupported = 0usize;
+
+        let poly = LwPolyline {
+            flags: 1,
+            vertices: vec![
+                LwPolylineVertex {
+                    x: 0.0,
+                    y: 0.0,
+                    ..Default::default()
+                },
+                LwPolylineVertex {
+                    x: 2.0,
+                    y: 4.0,
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        };
+        match classify_entity(&EntityType::LwPolyline(poly), &mut unsupported)
+            .expect("lwpolyline must classify")
+        {
+            Shape::Polyline { points, closed } => {
+                assert_eq!(points, vec![[0.0, 0.0], [2.0, 4.0]]);
+                assert!(closed, "flags bit 0 marks the polyline closed");
+            }
+            _ => panic!("expected Shape::Polyline"),
+        }
+
+        match classify_entity(
+            &EntityType::Circle(Circle::new(Point::new(1.0, 2.0, 0.0), 3.5)),
+            &mut unsupported,
+        )
+        .expect("circle must classify")
+        {
+            Shape::Circle { center, radius } => {
+                assert_eq!(center, [1.0, 2.0]);
+                assert_eq!(radius, 3.5);
+            }
+            _ => panic!("expected Shape::Circle"),
+        }
+
+        match classify_entity(
+            &EntityType::Arc(Arc::new(Point::new(4.0, 5.0, 0.0), 2.0, 30.0, 90.0)),
+            &mut unsupported,
+        )
+        .expect("arc must classify")
+        {
+            Shape::Arc {
+                center,
+                radius,
+                from_angle,
+                to_angle,
+            } => {
+                assert_eq!(center, [4.0, 5.0]);
+                assert_eq!(radius, 2.0);
+                assert_eq!(from_angle, 30.0);
+                assert_eq!(to_angle, 90.0);
+            }
+            _ => panic!("expected Shape::Arc"),
+        }
+
+        match classify_entity(
+            &EntityType::ModelPoint(ModelPoint::new(Point::new(7.0, -8.0, 0.0))),
+            &mut unsupported,
+        )
+        .expect("model point must classify")
+        {
+            Shape::Point { position } => assert_eq!(position, [7.0, -8.0]),
+            _ => panic!("expected Shape::Point"),
+        }
+
+        // Four distinct corners: the ring survives the duplicate collapse
+        // with all four rectangle corners, so this is a real fill.
+        let solid = Solid::new(
+            Point::new(0.0, 0.0, 0.0),
+            Point::new(2.0, 0.0, 0.0),
+            Point::new(2.0, 3.0, 0.0),
+            Point::new(0.0, 3.0, 0.0),
+        );
+        match classify_entity(&EntityType::Solid(solid), &mut unsupported)
+            .expect("solid with distinct corners must classify")
+        {
+            Shape::Fill { points } => {
+                assert_eq!(points.len(), 4, "a quad ring keeps its four corners");
+                for corner in [[0.0, 0.0], [2.0, 0.0], [2.0, 3.0], [0.0, 3.0]] {
+                    assert!(corner_present(&points, corner), "missing {corner:?}");
+                }
+            }
+            _ => panic!("expected Shape::Fill"),
+        }
+
+        assert_eq!(
+            unsupported, 0,
+            "supported entity types are never counted as unsupported"
+        );
+    }
+
+    #[test]
+    fn classify_entity_skips_a_degenerate_solid() {
+        let mut unsupported = 0usize;
+        // All four corners equal: the ring collapses to a single point,
+        // which is below the three-point minimum for a fill.
+        let solid = Solid::new(
+            Point::new(5.0, 5.0, 0.0),
+            Point::new(5.0, 5.0, 0.0),
+            Point::new(5.0, 5.0, 0.0),
+            Point::new(5.0, 5.0, 0.0),
+        );
+        assert!(
+            classify_entity(&EntityType::Solid(solid), &mut unsupported).is_none(),
+            "a solid that collapses below three points is not a fill"
+        );
+        assert_eq!(
+            unsupported, 0,
+            "a degenerate solid is skipped without being counted"
+        );
+    }
+
+    #[test]
+    fn read_dxf_text_returns_contents_and_errors_on_a_missing_file() {
+        let dir = TempDir::new("read_dxf_text");
+        let file = dir.as_ref().join("sample.dxf");
+        let content = "0\nSECTION\n2\nHEADER\n0\nENDSEC\n";
+        fs::write(&file, content).expect("temp DXF must be writable");
+        assert_eq!(
+            read_dxf_text(&file).expect("existing file must read"),
+            content
+        );
+
+        let missing = dir.as_ref().join("missing.dxf");
+        assert!(
+            read_dxf_text(&missing).is_err(),
+            "a missing path must surface an error"
+        );
+    }
+
+    #[test]
+    fn write_layer_files_counts_layers_and_assigns_unique_ids() {
+        let dir = TempDir::new("write_layer_files");
+        let mut layers: BTreeMap<String, LayerFile> = BTreeMap::new();
+        layers.insert(
+            "Wall".to_string(),
+            LayerFile {
+                entities: vec![
+                    Imported {
+                        shape: Shape::Line {
+                            from: [0.0, 0.0],
+                            to: [1.0, 0.0],
+                        },
+                        style: StyleAttrs::default(),
+                    },
+                    Imported {
+                        shape: Shape::Line {
+                            from: [1.0, 0.0],
+                            to: [1.0, 1.0],
+                        },
+                        style: StyleAttrs::default(),
+                    },
+                ],
+                counters: BTreeMap::new(),
+            },
+        );
+        layers.insert(
+            "Door".to_string(),
+            LayerFile {
+                entities: Vec::new(),
+                counters: BTreeMap::new(),
+            },
+        );
+        let layer_colors: BTreeMap<String, String> = BTreeMap::new();
+
+        let (imported_layers, project_toml) =
+            write_layer_files(dir.as_ref(), &mut layers, &layer_colors, "demo")
+                .expect("layer files must be written");
+
+        assert_eq!(imported_layers, 2, "one count per written layer");
+        assert!(project_toml.contains("\"Wall\" = { file = \"wall.cf\", locked = false }"));
+        assert!(project_toml.contains("\"Door\" = { file = \"door.cf\", locked = false }"));
+
+        let wall = fs::read_to_string(dir.as_ref().join("wall.cf")).expect("wall.cf must exist");
+        assert!(wall.contains("id = \"ln-001\""), "{}", wall);
+        assert!(
+            wall.contains("id = \"ln-002\""),
+            "second entity gets the next id: {}",
+            wall
+        );
+
+        let door = fs::read_to_string(dir.as_ref().join("door.cf")).expect("door.cf must exist");
+        assert!(
+            door.contains("from = [0.0, 0.0]"),
+            "empty layers still emit a placeholder line: {}",
+            door
+        );
+    }
+
+    #[test]
+    fn sanitize_for_filename_lowercases_and_replaces_separators() {
+        assert_eq!(sanitize_for_filename("A-b_c"), "a-b_c");
+        assert_eq!(sanitize_for_filename("abc"), "abc");
+        assert_eq!(sanitize_for_filename("a b"), "a_b");
+        assert_eq!(sanitize_for_filename("a-b"), "a-b");
+        assert_eq!(sanitize_for_filename(""), "layer");
+    }
+
+    #[test]
+    fn collect_layer_names_from_text_pairs_codes_with_values() {
+        let content = "0\nSECTION\n8\nWall\n8\nWall\n8\nDoor\n10\n0\n8\n0\n";
+        assert_eq!(
+            collect_layer_names_from_text(content),
+            vec!["Wall", "Door"],
+            "group 8 introduces a layer; duplicates and layer 0 are dropped"
+        );
+        assert_eq!(
+            collect_layer_names_from_text("8\nCeiling\n"),
+            vec!["Ceiling"]
+        );
+    }
+
+    #[test]
+    fn collect_layer_names_from_layer_table_reads_layer_records() {
+        let content = "0\nTABLE\n2\nLAYER\n100\nAcDbLayerTableRecord\n2\nWall\n100\nAcDbLayerTableRecord\n2\nDoor\n0\nENDTAB\n";
+        assert_eq!(
+            collect_layer_names_from_layer_table(content),
+            vec!["Wall", "Door"]
+        );
+    }
+
+    #[test]
+    fn collect_layer_names_from_layer_table_requires_the_layer_table_record() {
+        let content = "100\nNotTheRecord\n2\nWall\n";
+        assert_eq!(
+            collect_layer_names_from_layer_table(content),
+            Vec::<String>::new()
+        );
+    }
+
+    #[test]
+    fn collect_layer_names_from_layer_table_requires_a_record_before_the_name() {
+        let content = "2\nWall\n";
+        assert_eq!(
+            collect_layer_names_from_layer_table(content),
+            Vec::<String>::new()
+        );
+    }
+
+    #[test]
+    fn collect_layer_names_from_layer_table_skips_the_zero_layer() {
+        let content = "100\nAcDbLayerTableRecord\n2\n0\n";
+        assert_eq!(
+            collect_layer_names_from_layer_table(content),
+            Vec::<String>::new()
+        );
+    }
+
+    #[test]
+    fn collect_layer_names_from_layer_table_deduplicates_repeated_records() {
+        let content = "100\nAcDbLayerTableRecord\n2\nWall\n100\nAcDbLayerTableRecord\n2\nWall\n";
+        assert_eq!(collect_layer_names_from_layer_table(content), vec!["Wall"]);
+    }
 
     #[test]
     fn insert_layer_names_applies_the_filter() {

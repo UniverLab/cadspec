@@ -283,4 +283,115 @@ boundary = "missing"
         );
         assert!(pts.is_none());
     }
+
+    // ── Emission: what actually lands in the DXF ──────────────────────────
+
+    use dxf::entities::EntityType;
+
+    /// Compile a `.cf` snippet, write the DXF to a temp file and read it back.
+    fn compile_drawing(tag: &str, toml: &str) -> dxf::Drawing {
+        let cf = layer(toml);
+        let mut writer = DxfWriter::new();
+        writer.add_layer("l", 7);
+        compile_cf(&mut writer, &cf, "l");
+        let path =
+            std::env::temp_dir().join(format!("cadspec_emit_{}_{}.dxf", tag, std::process::id()));
+        writer.save(&path).unwrap();
+        let drawing = dxf::Drawing::load_file(&path).unwrap();
+        let _ = std::fs::remove_file(&path);
+        drawing
+    }
+
+    fn count_entities(drawing: &dxf::Drawing, matches: impl Fn(&EntityType) -> bool) -> usize {
+        drawing.entities().filter(|e| matches(&e.specific)).count()
+    }
+
+    #[test]
+    fn compile_emits_a_point_entity_per_point() {
+        let drawing = compile_drawing(
+            "points",
+            r#"[layer]
+name = "l"
+
+[[point]]
+position = [1.0, 2.0]
+
+[[point]]
+position = [-3.0, 4.5]
+"#,
+        );
+        assert_eq!(
+            count_entities(&drawing, |t| matches!(t, EntityType::ModelPoint(_))),
+            2
+        );
+    }
+
+    #[test]
+    fn compile_emits_a_polyline_entity_per_polyline() {
+        let drawing = compile_drawing(
+            "polylines",
+            r#"[layer]
+name = "l"
+
+[[polyline]]
+id = "zone"
+points = [[0.0, 0.0], [2.0, 0.0], [2.0, 2.0], [0.0, 2.0]]
+closed = true
+"#,
+        );
+        assert_eq!(
+            count_entities(&drawing, |t| matches!(t, EntityType::LwPolyline(_))),
+            1
+        );
+    }
+
+    #[test]
+    fn compile_labels_dims_with_the_measured_distance() {
+        // from (2,2) → to (5,6): dx=3, dy=4 → distance 5 → label "5.00".
+        let drawing = compile_drawing(
+            "dims",
+            r#"[layer]
+name = "l"
+
+[[dim]]
+from = [2.0, 2.0]
+to = [5.0, 6.0]
+offset = 0.5
+"#,
+        );
+        let texts: Vec<&str> = drawing
+            .entities()
+            .filter_map(|e| match &e.specific {
+                EntityType::Text(t) => Some(t.value.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert!(
+            texts.contains(&"5.00"),
+            "expected the dimension label 5.00, got {texts:?}"
+        );
+    }
+
+    #[test]
+    fn compile_scales_the_hatch_line_spacing() {
+        // 2×2 square, angle 0, scale 2 → spacing 0.2 → a fixed, known number
+        // of pattern lines inside the boundary (spacing drives the line count).
+        let drawing = compile_drawing(
+            "hatch",
+            r#"[layer]
+name = "l"
+
+[[hatch]]
+points = [[0.0, 0.0], [2.0, 0.0], [2.0, 2.0], [0.0, 2.0]]
+angle = 0.0
+scale = 2.0
+pattern = "ansi31"
+"#,
+        );
+        let lines = count_entities(&drawing, |t| matches!(t, EntityType::Line(_)));
+        assert_eq!(
+            lines, 11,
+            "spacing = 0.1 * scale = 0.2 must yield 11 clipped pattern lines"
+        );
+    }
 }

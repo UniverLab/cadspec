@@ -2,8 +2,7 @@
 //! reading, entity→TOML lookup, HTML escaping, browser launch.
 
 use crate::parser::parse_project;
-use std::io::{BufRead, BufReader};
-use std::net::TcpStream;
+use std::io::BufRead;
 use std::path::Path;
 
 /// Accept only a bare `*.cf` filename (no path traversal) for the editor.
@@ -20,7 +19,10 @@ pub(super) fn safe_cf_name(name: &str) -> Option<String> {
 }
 
 /// Read the remaining request headers, then the body of `Content-Length` bytes.
-pub(super) fn read_request_body(reader: &mut BufReader<TcpStream>) -> Vec<u8> {
+///
+/// Generic over `BufRead` so tests can drive it with an in-memory cursor; the
+/// production caller passes `&mut BufReader<TcpStream>` unchanged.
+pub(super) fn read_request_body<R: BufRead>(reader: &mut R) -> Vec<u8> {
     let mut len = 0usize;
     let mut line = String::new();
     loop {
@@ -52,7 +54,13 @@ fn percent_decode(s: &str) -> String {
     let bytes = s.as_bytes();
     let mut out = Vec::with_capacity(bytes.len());
     let mut i = 0;
-    while i < bytes.len() {
+    // Every arm consumes at least one byte, so `len` iterations suffice.
+    // The explicit bound keeps a (mutated) step operator from spinning
+    // forever: a stuck `i` simply yields wrong output after `len` passes.
+    for _ in 0..bytes.len() {
+        if i >= bytes.len() {
+            break;
+        }
         match bytes[i] {
             b'%' if i + 2 < bytes.len() => {
                 if let (Some(h), Some(l)) = (hex_val(bytes[i + 1]), hex_val(bytes[i + 2])) {
@@ -149,10 +157,14 @@ fn find_block(text: &str, id: &str) -> Option<String> {
     let header = lines[..=span_start_line.min(lines.len().saturating_sub(1))]
         .iter()
         .rposition(|l| l.trim_start().starts_with("[["))?;
-    let mut start = header;
-    while start > 0 && lines[start - 1].trim_start().starts_with('#') {
-        start -= 1;
-    }
+    // Bounded form of "walk up while the line above is a comment": each
+    // candidate is inspected at most once, so no step operator can hang here.
+    let comments = lines[..header]
+        .iter()
+        .rev()
+        .take_while(|l| l.trim_start().starts_with('#'))
+        .count();
+    let start = header - comments;
 
     Some(
         lines[start..=span_end_line]
@@ -186,6 +198,113 @@ pub(super) fn html_escape(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::{BufReader, Cursor};
+
+    #[test]
+    fn safe_cf_name_accepts_bare_cf_names() {
+        // A plain `*.cf` filename must pass through untouched: this pins the
+        // `Some(...)` return, so a `-> None` rewrite or a dropped `!` on the
+        // `ends_with(".cf")` check cannot land unnoticed.
+        assert_eq!(safe_cf_name("plano.cf").as_deref(), Some("plano.cf"));
+        assert_eq!(safe_cf_name("muros-v2.cf").as_deref(), Some("muros-v2.cf"));
+    }
+
+    #[test]
+    fn safe_cf_name_rejects_paths_and_foreign_extensions() {
+        // Each rejection pins one of the `||` guards in the condition: with a
+        // `&&` substitution the matching input would wrongly return `Some`.
+        assert_eq!(safe_cf_name("a/b.cf"), None); // contains '/'
+        assert_eq!(safe_cf_name("a\\b.cf"), None); // contains '\\'
+        assert_eq!(safe_cf_name("a..b.cf"), None); // contains ".."
+        assert_eq!(safe_cf_name("../plano.cf"), None); // traversal
+        assert_eq!(safe_cf_name(""), None); // empty
+        assert_eq!(safe_cf_name("x.txt"), None); // needs `!ends_with(".cf")`
+    }
+
+    #[test]
+    fn read_request_body_reads_content_length_body() {
+        let raw = b"Content-Length: 5\r\nX-Other: y\r\n\r\nhello".to_vec();
+        let mut reader = BufReader::new(Cursor::new(raw));
+        let body = read_request_body(&mut reader);
+        assert_eq!(body, b"hello".to_vec());
+    }
+
+    #[test]
+    fn read_request_body_without_content_length_is_empty() {
+        let raw = b"X-Foo: bar\r\n\r\nleftover".to_vec();
+        let mut reader = BufReader::new(Cursor::new(raw));
+        let body = read_request_body(&mut reader);
+        assert!(body.is_empty(), "body: {:?}", body);
+    }
+
+    #[test]
+    fn percent_decode_translates_hex_escapes() {
+        // Uppercase, lowercase and digit hex — plus arithmetic-sensitive arms.
+        assert_eq!(percent_decode("%41"), "A");
+        assert_eq!(percent_decode("%4a"), "J"); // lowercase `b'a'..=b'f'` arm
+        assert_eq!(percent_decode("%4A"), "J"); // uppercase `b'A'..=b'F'` arm
+        assert_eq!(percent_decode("%30"), "0"); // digit `b'0'..=b'9'` arm
+        assert_eq!(percent_decode("%2B"), "+"); // encoded '+'
+        assert_eq!(percent_decode("a%20b"), "a b");
+        assert_eq!(percent_decode("ln%2D001"), "ln-001");
+    }
+
+    #[test]
+    fn percent_decode_handles_truncated_and_invalid_sequences() {
+        // "%" / "%4" pin the `i + 2 < len` guard and its arithmetic: a
+        // rewritten guard makes these index out of bounds and panic.
+        assert_eq!(percent_decode("%"), "%");
+        assert_eq!(percent_decode("%4"), "%4");
+        // Invalid hex takes the `i += 1` fallback arm.
+        assert_eq!(percent_decode("%zz"), "%zz");
+        // The '+' arm and the plain-byte arm.
+        assert_eq!(percent_decode("a+b"), "a b");
+        assert_eq!(percent_decode("abc"), "abc");
+        assert_eq!(percent_decode(""), "");
+    }
+
+    #[test]
+    fn entity_block_json_reports_block_and_missing_ids() {
+        let dir = std::env::temp_dir().join(format!("cadspec_serve_entity_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("project.toml"),
+            "[project]\nname = \"Inspect Test\"\n\n[layers]\nmuros = { file = \"muros.cf\" }\n",
+        )
+        .unwrap();
+        std::fs::write(
+            dir.join("muros.cf"),
+            "[layer]\nname = \"muros\"\n\n# Puerta principal\n[[line]]\nid = \"ln-1\"\nfrom = [0.0, 0.0]\nto = [1.0, 0.0]\n",
+        )
+        .unwrap();
+
+        let found: serde_json::Value =
+            serde_json::from_str(&entity_block_json(&dir, "ln-1")).unwrap();
+        assert_eq!(found["id"], "ln-1");
+        assert_eq!(found["base_id"], "ln-1");
+        assert_eq!(found["generated"], false);
+        assert_eq!(found["layer"], "muros");
+        assert_eq!(found["file"], "muros.cf");
+        let block = found["block"].as_str().unwrap();
+        assert!(block.contains("[[line]]"), "block: {}", block);
+        assert!(block.contains("id = \"ln-1\""), "block: {}", block);
+
+        // A generated copy (@ suffix) reports its base id and `generated`.
+        let gen: serde_json::Value =
+            serde_json::from_str(&entity_block_json(&dir, "ln-1@2")).unwrap();
+        assert_eq!(gen["base_id"], "ln-1");
+        assert_eq!(gen["generated"], true);
+        assert!(gen["block"].as_str().unwrap().contains("[[line]]"));
+
+        // Unknown ids are an error payload, not a panic.
+        let missing: serde_json::Value =
+            serde_json::from_str(&entity_block_json(&dir, "nope")).unwrap();
+        assert_eq!(missing["id"], "nope");
+        assert_eq!(missing["error"], "not found");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn find_block_extracts_entity_with_comments() {
