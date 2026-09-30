@@ -193,42 +193,9 @@ fn main() -> Result<()> {
             layer,
             output,
             check,
-        } => {
-            let dir = resolve_project_dir(path)?;
-            if check {
-                check_project(&dir)?;
-                Ok(())
-            } else {
-                compile_project(&dir, layer.as_deref(), output.as_deref())
-            }
-        }
-        Commands::Check { path, json } => {
-            let dir = resolve_project_dir(path)?;
-            if json {
-                let report = project_report(&dir)?;
-                println!("{}", serde_json::to_string_pretty(&report)?);
-                if report.strict && !report.issues.is_empty() {
-                    bail!(
-                        "Check failed: {} constraint violation(s) with strict = true",
-                        report.issues.len()
-                    );
-                }
-                Ok(())
-            } else {
-                check_project(&dir)?;
-                Ok(())
-            }
-        }
-        Commands::Layers { path, json } => {
-            let dir = resolve_project_dir(path)?;
-            if json {
-                let report = project_report(&dir)?;
-                println!("{}", serde_json::to_string_pretty(&report)?);
-                Ok(())
-            } else {
-                list_layers(&dir)
-            }
-        }
+        } => run_build(path, layer, output, check),
+        Commands::Check { path, json } => run_check(path, json),
+        Commands::Layers { path, json } => run_layers(path, json),
         Commands::Preview {
             path,
             width,
@@ -273,16 +240,7 @@ fn main() -> Result<()> {
             open,
             foreground,
             stop,
-        } => {
-            let dir = resolve_project_dir(path)?;
-            if stop {
-                serve_stop(&dir, port)
-            } else if foreground {
-                serve_project(&dir, port, open)
-            } else {
-                serve_daemon(&dir, port, open)
-            }
-        }
+        } => run_serve(path, port, open, foreground, stop),
         Commands::Schema => {
             print_schema();
             Ok(())
@@ -311,6 +269,67 @@ fn main() -> Result<()> {
             ConfigCommands::Set { key, value } => config_set(&key, &value),
             ConfigCommands::Show => config_show(),
         },
+    }
+}
+
+fn run_build(
+    path: Option<PathBuf>,
+    layer: Option<String>,
+    output: Option<PathBuf>,
+    check: bool,
+) -> Result<()> {
+    let dir = resolve_project_dir(path)?;
+    if check {
+        check_project(&dir)?;
+        Ok(())
+    } else {
+        compile_project(&dir, layer.as_deref(), output.as_deref())
+    }
+}
+
+fn run_check(path: Option<PathBuf>, json: bool) -> Result<()> {
+    let dir = resolve_project_dir(path)?;
+    if json {
+        let report = project_report(&dir)?;
+        println!("{}", serde_json::to_string_pretty(&report)?);
+        if report.strict && !report.issues.is_empty() {
+            bail!(
+                "Check failed: {} constraint violation(s) with strict = true",
+                report.issues.len()
+            );
+        }
+        Ok(())
+    } else {
+        check_project(&dir)?;
+        Ok(())
+    }
+}
+
+fn run_layers(path: Option<PathBuf>, json: bool) -> Result<()> {
+    let dir = resolve_project_dir(path)?;
+    if json {
+        let report = project_report(&dir)?;
+        println!("{}", serde_json::to_string_pretty(&report)?);
+        Ok(())
+    } else {
+        list_layers(&dir)
+    }
+}
+
+fn run_serve(
+    path: Option<PathBuf>,
+    port: u16,
+    open: bool,
+    foreground: bool,
+    stop: bool,
+) -> Result<()> {
+    let dir = resolve_project_dir(path)?;
+    if stop {
+        serve_stop(&dir, port)
+    } else if foreground {
+        serve_project(&dir, port, open)
+    } else {
+        serve_daemon(&dir, port, open)
     }
 }
 

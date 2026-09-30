@@ -19,7 +19,7 @@ toml = "0.8"
 toml_edit = "0.22"
 indexmap = { version = "2", features = ["serde"] }
 notify = "6.1"
-resvg = "0.47.0"
+resvg = "0.48"
 
 [profile.release]
 opt-level = 3
