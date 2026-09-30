@@ -54,9 +54,17 @@ fn readme_has_no_crates_io_badge() {
         !readme.contains("img.shields.io/crates"),
         "cadspec is not published on crates.io, so no crates.io version badge"
     );
+    // The same 404 URL survived once as a markdown link ("Available on
+    // crates.io") above a `cargo install cadspec` that cannot resolve — the
+    // badge-shaped assertions did not catch it. While the crate is
+    // unpublished, no README route may mention crates.io at all.
     assert!(
-        !readme.contains("<a href=\"https://crates.io/crates/cadspec\"><img"),
-        "the crates.io badge link must go with its image"
+        !readme.contains("crates.io"),
+        "no README route may link crates.io while the crate is unpublished"
+    );
+    assert!(
+        !readme.contains("cargo install cadspec"),
+        "`cargo install cadspec` only resolves against the crates.io registry"
     );
 }
 

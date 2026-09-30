@@ -55,14 +55,6 @@ curl -fsSL https://install.univerlab.org/cadspec | sh
 irm https://raw.githubusercontent.com/UniverLab/cadspec/main/scripts/install.ps1 | iex
 ```
 
-### Via cargo
-
-```bash
-cargo install cadspec
-```
-
-Available on [crates.io](https://crates.io/crates/cadspec).
-
 ### From source
 
 ```bash
