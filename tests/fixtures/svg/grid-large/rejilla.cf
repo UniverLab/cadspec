@@ -1,0 +1,14 @@
+[layer]
+name = "rejilla"
+color = "#FFFFFF"
+
+# Extents x in [-10, 29], y in [0, 10]: C = 39, world_w = 41 -> step 2.
+[[line]]
+id = "gl-h"
+from = [-10.0, 0.0]
+to = [29.0, 0.0]
+
+[[line]]
+id = "gl-v"
+from = [-10.0, 0.0]
+to = [-10.0, 10.0]

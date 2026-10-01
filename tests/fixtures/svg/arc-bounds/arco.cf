@@ -1,0 +1,14 @@
+[layer]
+name = "arco"
+color = "#FFFFFF"
+
+# The arc is this project's ONLY geometry, and compute_bounds treats an arc as
+# its full circumscribed circle. Its four `center +/- radius` terms are therefore
+# the scene bounds, so every arithmetic mutant on them moves world_w/world_h and
+# with them the viewport size and the scale: a wrong arc bound cannot survive.
+[[arc]]
+id = "ab-1"
+center = [0.0, 0.0]
+radius = 3.0
+from_angle = 0.0
+to_angle = 90.0

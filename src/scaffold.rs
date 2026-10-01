@@ -53,7 +53,17 @@ pub fn init_project(dir: &Path) -> Result<()> {
 }
 
 fn write_project_files(project_dir: &Path, name: &str) -> Result<()> {
-    let project_toml = format!(
+    fs::write(project_dir.join("project.toml"), project_toml_text(name))?;
+    fs::write(project_dir.join(".gitignore"), GITIGNORE_TEXT)?;
+    fs::write(project_dir.join("shapes.cf"), SHAPES_CF_TEXT)?;
+    fs::write(project_dir.join("curves.cf"), CURVES_CF_TEXT)?;
+    fs::write(project_dir.join("annotations.cf"), ANNOTATIONS_CF_TEXT)?;
+    Ok(())
+}
+
+/// The `project.toml` of a fresh project, with its name filled in.
+fn project_toml_text(name: &str) -> String {
+    format!(
         r#"[project]
 name = "{name}"
 scale = "1:100"
@@ -64,13 +74,12 @@ shapes = {{ file = "shapes.cf", locked = false }}
 curves = {{ file = "curves.cf", locked = false }}
 annotations = {{ file = "annotations.cf", locked = false }}
 "#
-    );
-    fs::write(project_dir.join("project.toml"), project_toml)?;
+    )
+}
 
-    let gitignore = "# CADspec output\noutput.dxf\npreview.png\npreview.svg\npreview.meta.json\n\n# CADspec serve daemon (pid + logs)\n.cadspec/\n\n# Rust build artifacts\ntarget/\n";
-    fs::write(project_dir.join(".gitignore"), gitignore)?;
+const GITIGNORE_TEXT: &str = "# CADspec output\noutput.dxf\npreview.png\npreview.svg\npreview.meta.json\n\n# CADspec serve daemon (pid + logs)\n.cadspec/\n\n# Rust build artifacts\ntarget/\n";
 
-    let shapes_cf = r##"[layer]
+const SHAPES_CF_TEXT: &str = r##"[layer]
 name = "shapes"
 color = "#FFFFFF"
 line_weight = 0.35
@@ -102,9 +111,8 @@ boundary = "pl-001"
 pattern = "ansi31"
 angle = 45.0
 "##;
-    fs::write(project_dir.join("shapes.cf"), shapes_cf)?;
 
-    let curves_cf = r##"[layer]
+const CURVES_CF_TEXT: &str = r##"[layer]
 name = "curves"
 color = "#4488FF"
 line_weight = 0.25
@@ -138,9 +146,8 @@ count = 6
 center = [10.0, 8.0]
 step_angle = 60.0
 "##;
-    fs::write(project_dir.join("curves.cf"), curves_cf)?;
 
-    let annotations_cf = r##"[layer]
+const ANNOTATIONS_CF_TEXT: &str = r##"[layer]
 name = "annotations"
 color = "#FF4444"
 line_weight = 0.18
@@ -168,10 +175,6 @@ content = "curves"
 size = 0.4
 align = "center"
 "##;
-    fs::write(project_dir.join("annotations.cf"), annotations_cf)?;
-
-    Ok(())
-}
 
 #[cfg(test)]
 mod tests {

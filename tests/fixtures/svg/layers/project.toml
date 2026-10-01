@@ -1,0 +1,8 @@
+[project]
+name = "svg-golden-layers"
+units = "m"
+
+[layers]
+colorada = { file = "colorada.cf", locked = false }
+auto = { file = "auto.cf", locked = false }
+oculta = { file = "oculta.cf", locked = false }

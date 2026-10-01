@@ -1,0 +1,9 @@
+[layer]
+name = "marca"
+
+# No color: falls back to the palette entry for this layer index.
+[[line]]
+id = "ln-marca"
+from = [0.0, 3.5]
+to = [11.0, 3.5]
+style = "dashed"

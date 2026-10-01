@@ -1,0 +1,6 @@
+[project]
+name = "svg-golden-arc-bounds"
+units = "m"
+
+[layers]
+arco = { file = "arco.cf", locked = false }

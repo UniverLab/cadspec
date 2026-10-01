@@ -1,0 +1,10 @@
+[layer]
+name = "oculta"
+color = "#FF5050"
+visible = false
+
+[[rect]]
+id = "rc-oculta"
+origin = [2.0, 2.0]
+width = 1.0
+height = 1.0

@@ -1,0 +1,15 @@
+[layer]
+name = "rejilla"
+color = "#FFFFFF"
+
+# Extents x in [0, 37.5], y in [0, 10]: C = 37.5, world_w = 39.5 -> step 1.
+# min_x = 0 makes the `- -> /` mutant observable (max_x / 0 = inf).
+[[line]]
+id = "gw-h"
+from = [0.0, 0.0]
+to = [37.5, 0.0]
+
+[[line]]
+id = "gw-v"
+from = [0.0, 0.0]
+to = [0.0, 10.0]

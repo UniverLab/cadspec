@@ -1,0 +1,132 @@
+[layer]
+name = "plano"
+color = "#50C8FF"
+line_weight = 0.5
+
+# Frame line pins the low-x / low-y extents (min_x = 0, min_y = 0).
+[[line]]
+id = "ln-dashed"
+from = [0.0, 0.0]
+to = [12.0, 0.0]
+style = "dashed"
+
+[[line]]
+id = "ln-dotted"
+from = [0.0, 1.0]
+to = [12.0, 1.0]
+style = "dotted"
+
+[[line]]
+id = "ln-dashdot"
+from = [0.0, 2.0]
+to = [12.0, 2.0]
+style = "dashdot"
+weight = 1.0
+
+[[rect]]
+id = "rc-1"
+origin = [1.0, 1.0]
+width = 3.0
+height = 2.0
+
+[[rect]]
+id = "rc-hidden"
+origin = [5.0, 5.0]
+width = 1.0
+height = 1.0
+visible = false
+
+[[circle]]
+id = "ci-1"
+center = [5.0, 5.0]
+radius = 1.5
+
+[[arc]]
+id = "ar-1"
+center = [2.0, 2.0]
+radius = 1.0
+from_angle = 30.0
+to_angle = 120.0
+
+[[polyline]]
+id = "pl-room"
+points = [[0.0, 0.0], [4.0, 0.0], [4.0, 3.0], [0.0, 3.0]]
+closed = true
+
+# Open polyline with >= 3 points; top edge pins max_y = 8.
+[[polyline]]
+id = "pl-open"
+points = [[0.0, 8.0], [4.0, 8.0], [8.0, 7.0]]
+closed = false
+
+[[point]]
+id = "pt-1"
+position = [3.0, 3.0]
+
+[[text]]
+id = "tx-center"
+position = [6.0, 6.0]
+content = "CENTRO"
+size = 0.3
+align = "center"
+
+[[text]]
+id = "tx-right"
+position = [6.0, 5.0]
+content = "DERECHA"
+size = 0.3
+align = "right"
+bold = true
+
+[[text]]
+id = "tx-left"
+position = [6.0, 4.0]
+content = "IZQUIERDA"
+size = 0.3
+align = "left"
+italic = true
+font = "serif"
+
+[[text]]
+id = "tx-plain"
+position = [9.0, 6.0]
+content = "PLANO <rotado>"
+size = 0.3
+rotation = 45.0
+
+# Asymmetric hatch boundary (min+max != 0 on both axes), extents not a
+# multiple of the 0.1 spacing.
+[[polyline]]
+id = "pl-hatch-boundary"
+points = [[6.13, 4.07], [10.66, 4.07], [10.66, 7.33], [6.13, 7.33]]
+closed = true
+
+[[hatch]]
+id = "ht-ansi31"
+boundary = "pl-hatch-boundary"
+pattern = "ansi31"
+
+[[hatch]]
+id = "ht-solid"
+boundary = "pl-hatch-boundary"
+pattern = "solid"
+
+[[hatch]]
+id = "ht-ansi37"
+boundary = "pl-hatch-boundary"
+pattern = "ansi37"
+angle = 0.0
+scale = 2.0
+
+[[hatch]]
+id = "ht-inline"
+points = [[0.5, 4.5], [2.7, 4.5], [2.7, 6.9], [0.5, 6.9]]
+pattern = "ansi31"
+
+[[fill]]
+id = "fl-boundary"
+boundary = "pl-hatch-boundary"
+
+[[fill]]
+id = "fl-inline"
+points = [[8.0, 0.5], [11.0, 0.5], [11.0, 2.5], [8.0, 2.5]]

@@ -146,64 +146,100 @@ fn copy_targets(
     orbit_only: bool,
     suffix: &str,
 ) {
-    fn hit(id: &Option<String>, targets: &HashSet<String>) -> bool {
-        id.as_deref().is_some_and(|i| targets.contains(i))
-    }
-    fn suffixed(id: &Option<String>, suffix: &str) -> Option<String> {
-        id.as_ref().map(|i| format!("{}{}", i, suffix))
+    let ctx = CopyCtx {
+        targets,
+        op,
+        orbit_only,
+        suffix,
+    };
+    copy_lines(out, &ctx);
+    copy_polylines(out, &ctx);
+    copy_rects(out, &ctx);
+    copy_circles(out, &ctx);
+    copy_arcs(out, &ctx);
+    copy_texts(out, &ctx);
+    copy_points(out, &ctx);
+    copy_dims(out, &ctx);
+    copy_hatches(out, &ctx);
+    copy_fills(out, &ctx);
+}
+
+/// The shared inputs of one copy pass over every entity vector.
+struct CopyCtx<'a> {
+    targets: &'a HashSet<String>,
+    op: PointOp,
+    orbit_only: bool,
+    suffix: &'a str,
+}
+
+impl CopyCtx<'_> {
+    /// Is this entity's id one of the copy targets?
+    fn hit(&self, id: &Option<String>) -> bool {
+        id.as_deref().is_some_and(|i| self.targets.contains(i))
     }
 
+    /// The copy's derived id (`base@1`, `base@m`, …).
+    fn suffixed(&self, id: &Option<String>) -> Option<String> {
+        id.as_ref().map(|i| format!("{}{}", i, self.suffix))
+    }
+}
+
+fn copy_lines(out: &mut CfFile, ctx: &CopyCtx) {
     let mut new_lines = Vec::new();
-    for e in out.lines.iter().filter(|e| hit(&e.common.id, targets)) {
+    for e in out.lines.iter().filter(|e| ctx.hit(&e.common.id)) {
         let mut c = e.clone();
-        c.from = op.apply(c.from);
-        c.to = op.apply(c.to);
-        c.common.id = suffixed(&e.common.id, suffix);
+        c.from = ctx.op.apply(c.from);
+        c.to = ctx.op.apply(c.to);
+        c.common.id = ctx.suffixed(&e.common.id);
         new_lines.push(c);
     }
     out.lines.extend(new_lines);
+}
 
+fn copy_polylines(out: &mut CfFile, ctx: &CopyCtx) {
     let mut new_polys = Vec::new();
-    for e in out.polylines.iter().filter(|e| hit(&e.common.id, targets)) {
+    for e in out.polylines.iter().filter(|e| ctx.hit(&e.common.id)) {
         let mut c = e.clone();
         for p in &mut c.points {
-            *p = op.apply(*p);
+            *p = ctx.op.apply(*p);
         }
-        c.common.id = suffixed(&e.common.id, suffix);
+        c.common.id = ctx.suffixed(&e.common.id);
         new_polys.push(c);
     }
     out.polylines.extend(new_polys);
+}
 
+fn copy_rects(out: &mut CfFile, ctx: &CopyCtx) {
     // Rects: a translated copy stays a rect; a rotated or mirrored copy
     // becomes a closed polyline (rects are axis-aligned by definition).
     let mut rect_polys = Vec::new();
     let mut new_rects = Vec::new();
-    for e in out.rects.iter().filter(|e| hit(&e.common.id, targets)) {
+    for e in out.rects.iter().filter(|e| ctx.hit(&e.common.id)) {
         let corners = [
             e.origin,
             [e.origin[0] + e.width, e.origin[1]],
             [e.origin[0] + e.width, e.origin[1] + e.height],
             [e.origin[0], e.origin[1] + e.height],
         ];
-        let keeps_shape = matches!(op, PointOp::Translate { .. }) || orbit_only;
+        let keeps_shape = matches!(ctx.op, PointOp::Translate { .. }) || ctx.orbit_only;
         if keeps_shape {
             let mut c = e.clone();
-            if orbit_only {
+            if ctx.orbit_only {
                 // Orbit the rect center, keep the rect axis-aligned.
                 let center = [e.origin[0] + e.width / 2.0, e.origin[1] + e.height / 2.0];
-                let moved = op.apply(center);
+                let moved = ctx.op.apply(center);
                 c.origin = [moved[0] - e.width / 2.0, moved[1] - e.height / 2.0];
             } else {
-                c.origin = op.apply(c.origin);
+                c.origin = ctx.op.apply(c.origin);
             }
-            c.common.id = suffixed(&e.common.id, suffix);
+            c.common.id = ctx.suffixed(&e.common.id);
             new_rects.push(c);
         } else {
             rect_polys.push(crate::model::CfPolyline {
-                points: corners.iter().map(|&p| op.apply(p)).collect(),
+                points: corners.iter().map(|&p| ctx.op.apply(p)).collect(),
                 closed: true,
                 common: crate::model::CommonAttrs {
-                    id: suffixed(&e.common.id, suffix),
+                    id: ctx.suffixed(&e.common.id),
                     ..e.common.clone()
                 },
             });
@@ -211,106 +247,121 @@ fn copy_targets(
     }
     out.rects.extend(new_rects);
     out.polylines.extend(rect_polys);
+}
 
+fn copy_circles(out: &mut CfFile, ctx: &CopyCtx) {
     let mut new_circles = Vec::new();
-    for e in out.circles.iter().filter(|e| hit(&e.common.id, targets)) {
+    for e in out.circles.iter().filter(|e| ctx.hit(&e.common.id)) {
         let mut c = e.clone();
-        c.center = op.apply(c.center);
-        c.common.id = suffixed(&e.common.id, suffix);
+        c.center = ctx.op.apply(c.center);
+        c.common.id = ctx.suffixed(&e.common.id);
         new_circles.push(c);
     }
     out.circles.extend(new_circles);
+}
 
+fn copy_arcs(out: &mut CfFile, ctx: &CopyCtx) {
     let mut new_arcs = Vec::new();
-    for e in out.arcs.iter().filter(|e| hit(&e.common.id, targets)) {
+    for e in out.arcs.iter().filter(|e| ctx.hit(&e.common.id)) {
         let mut c = e.clone();
-        c.center = op.apply(c.center);
-        if !orbit_only {
-            if op.flips_orientation() {
+        c.center = ctx.op.apply(c.center);
+        if !ctx.orbit_only {
+            if ctx.op.flips_orientation() {
                 // Reflected sweep: endpoints swap to keep the arc CCW.
-                let from = op.apply_angle_deg(e.to_angle);
-                let to = op.apply_angle_deg(e.from_angle);
+                let from = ctx.op.apply_angle_deg(e.to_angle);
+                let to = ctx.op.apply_angle_deg(e.from_angle);
                 c.from_angle = from;
                 c.to_angle = to;
             } else {
-                c.from_angle = op.apply_angle_deg(e.from_angle);
-                c.to_angle = op.apply_angle_deg(e.to_angle);
+                c.from_angle = ctx.op.apply_angle_deg(e.from_angle);
+                c.to_angle = ctx.op.apply_angle_deg(e.to_angle);
             }
         }
-        c.common.id = suffixed(&e.common.id, suffix);
+        c.common.id = ctx.suffixed(&e.common.id);
         new_arcs.push(c);
     }
     out.arcs.extend(new_arcs);
+}
 
+fn copy_texts(out: &mut CfFile, ctx: &CopyCtx) {
     // Texts stay upright: only the anchor moves.
     let mut new_texts = Vec::new();
-    for e in out.texts.iter().filter(|e| hit(&e.common.id, targets)) {
+    for e in out.texts.iter().filter(|e| ctx.hit(&e.common.id)) {
         let mut c = e.clone();
-        c.position = op.apply(c.position);
-        c.common.id = suffixed(&e.common.id, suffix);
+        c.position = ctx.op.apply(c.position);
+        c.common.id = ctx.suffixed(&e.common.id);
         new_texts.push(c);
     }
     out.texts.extend(new_texts);
+}
 
+fn copy_points(out: &mut CfFile, ctx: &CopyCtx) {
     let mut new_points = Vec::new();
-    for e in out.points.iter().filter(|e| hit(&e.common.id, targets)) {
+    for e in out.points.iter().filter(|e| ctx.hit(&e.common.id)) {
         let mut c = e.clone();
-        c.position = op.apply(c.position);
-        c.common.id = suffixed(&e.common.id, suffix);
+        c.position = ctx.op.apply(c.position);
+        c.common.id = ctx.suffixed(&e.common.id);
         new_points.push(c);
     }
     out.points.extend(new_points);
+}
 
+fn copy_dims(out: &mut CfFile, ctx: &CopyCtx) {
     let mut new_dims = Vec::new();
-    for e in out.dims.iter().filter(|e| hit(&e.common.id, targets)) {
+    for e in out.dims.iter().filter(|e| ctx.hit(&e.common.id)) {
         let mut c = e.clone();
-        c.from = op.apply(c.from);
-        c.to = op.apply(c.to);
-        if op.flips_orientation() {
+        c.from = ctx.op.apply(c.from);
+        c.to = ctx.op.apply(c.to);
+        if ctx.op.flips_orientation() {
             c.offset = -c.offset;
         }
-        c.common.id = suffixed(&e.common.id, suffix);
+        c.common.id = ctx.suffixed(&e.common.id);
         new_dims.push(c);
     }
     out.dims.extend(new_dims);
+}
 
-    // Hatches/fills follow their boundary: if the boundary was copied too,
-    // the copy references the copied boundary id.
+// Hatches/fills follow their boundary: if the boundary was copied too,
+// the copy references the copied boundary id.
+fn copy_hatches(out: &mut CfFile, ctx: &CopyCtx) {
     let mut new_hatches = Vec::new();
-    for e in out.hatches.iter().filter(|e| hit(&e.common.id, targets)) {
+    for e in out.hatches.iter().filter(|e| ctx.hit(&e.common.id)) {
         let mut c = e.clone();
-        if let Some(boundary) = &e.boundary {
-            if targets.contains(boundary) {
-                c.boundary = Some(format!("{}{}", boundary, suffix));
-            }
-        }
-        if let Some(points) = &mut c.points {
-            for p in points {
-                *p = op.apply(*p);
-            }
-        }
-        c.common.id = suffixed(&e.common.id, suffix);
+        c.boundary = retarget_boundary(&e.boundary, ctx);
+        transform_points(&mut c.points, &ctx.op);
+        c.common.id = ctx.suffixed(&e.common.id);
         new_hatches.push(c);
     }
     out.hatches.extend(new_hatches);
+}
 
+fn copy_fills(out: &mut CfFile, ctx: &CopyCtx) {
     let mut new_fills = Vec::new();
-    for e in out.fills.iter().filter(|e| hit(&e.common.id, targets)) {
+    for e in out.fills.iter().filter(|e| ctx.hit(&e.common.id)) {
         let mut c = e.clone();
-        if let Some(boundary) = &e.boundary {
-            if targets.contains(boundary) {
-                c.boundary = Some(format!("{}{}", boundary, suffix));
-            }
-        }
-        if let Some(points) = &mut c.points {
-            for p in points {
-                *p = op.apply(*p);
-            }
-        }
-        c.common.id = suffixed(&e.common.id, suffix);
+        c.boundary = retarget_boundary(&e.boundary, ctx);
+        transform_points(&mut c.points, &ctx.op);
+        c.common.id = ctx.suffixed(&e.common.id);
         new_fills.push(c);
     }
     out.fills.extend(new_fills);
+}
+
+/// Keep a region's boundary id unless the boundary itself was copied too —
+/// then the copy must reference the copied boundary.
+fn retarget_boundary(boundary: &Option<String>, ctx: &CopyCtx) -> Option<String> {
+    match boundary {
+        Some(b) if ctx.targets.contains(b) => Some(format!("{}{}", b, ctx.suffix)),
+        other => other.clone(),
+    }
+}
+
+fn transform_points(points: &mut Option<Vec<[f64; 2]>>, op: &PointOp) {
+    if let Some(points) = points {
+        for p in points {
+            *p = op.apply(*p);
+        }
+    }
 }
 
 #[cfg(test)]
@@ -486,5 +537,204 @@ offset = [3.0, 0.0]
         assert_eq!(out.hatches.len(), 2);
         assert_eq!(out.hatches[1].boundary.as_deref(), Some("zona@1"));
         assert_eq!(out.polylines[1].points[0], [3.0, 0.0]);
+    }
+
+    #[test]
+    fn linear_array_copies_circles_with_shifted_centers() {
+        let cf = parse(
+            r#"
+[[circle]]
+id = "c"
+center = [1.0, 1.0]
+radius = 0.5
+
+[[array]]
+target = "c"
+mode = "linear"
+count = 3
+offset = [2.0, 0.0]
+"#,
+        );
+        let out = expand_cf(&cf);
+        assert_eq!(out.circles.len(), 3, "both circle copies must be created");
+        assert_eq!(out.circles[1].common.id.as_deref(), Some("c@1"));
+        assert_eq!(out.circles[2].common.id.as_deref(), Some("c@2"));
+        assert_eq!(out.circles[1].center, [3.0, 1.0]);
+        assert_eq!(out.circles[2].center, [5.0, 1.0]);
+        assert_eq!(out.circles[2].radius, 0.5);
+    }
+
+    #[test]
+    fn linear_array_copies_texts_moving_anchor() {
+        let cf = parse(
+            r#"
+[[text]]
+id = "t"
+position = [0.0, 0.0]
+content = "X"
+size = 0.3
+
+[[array]]
+target = "t"
+mode = "linear"
+count = 3
+offset = [2.0, 1.0]
+"#,
+        );
+        let out = expand_cf(&cf);
+        assert_eq!(out.texts.len(), 3, "both text copies must be created");
+        assert_eq!(out.texts[2].common.id.as_deref(), Some("t@2"));
+        assert_eq!(out.texts[2].position, [4.0, 2.0]);
+        assert_eq!(out.texts[2].content, "X");
+    }
+
+    #[test]
+    fn linear_array_copies_dims_moving_endpoints() {
+        let cf = parse(
+            r#"
+[[dim]]
+id = "d"
+type = "linear"
+from = [0.0, 0.0]
+to = [2.0, 0.0]
+offset = 0.5
+
+[[array]]
+target = "d"
+mode = "linear"
+count = 3
+offset = [2.0, 0.0]
+"#,
+        );
+        let out = expand_cf(&cf);
+        assert_eq!(out.dims.len(), 3, "both dim copies must be created");
+        assert_eq!(out.dims[2].common.id.as_deref(), Some("d@2"));
+        assert_eq!(out.dims[2].from, [4.0, 0.0]);
+        assert_eq!(out.dims[2].to, [6.0, 0.0]);
+        assert_eq!(out.dims[2].offset, 0.5);
+    }
+
+    #[test]
+    fn linear_array_copies_fill_points_exactly() {
+        let cf = parse(
+            r#"
+[[fill]]
+id = "f"
+points = [[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]]
+
+[[array]]
+target = "f"
+mode = "linear"
+count = 3
+offset = [2.0, 0.0]
+"#,
+        );
+        let out = expand_cf(&cf);
+        assert_eq!(out.fills.len(), 3, "both fill copies must be created");
+        let copy = &out.fills[2];
+        assert_eq!(copy.common.id.as_deref(), Some("f@2"));
+        let points = copy.points.as_ref().expect("fill keeps its points");
+        assert_eq!(points.len(), 3);
+        assert_eq!(points[0], [4.0, 0.0]);
+        assert_eq!(points[1], [5.0, 0.0]);
+        assert_eq!(points[2], [4.0, 1.0]);
+    }
+
+    #[test]
+    fn fill_copy_keeps_boundary_when_boundary_not_targeted() {
+        // The array targets only the fill; the boundary polyline "zone" is
+        // NOT copied, so the fill copy must keep referencing "zone" itself.
+        let cf = parse(
+            r#"
+[[polyline]]
+id = "zone"
+points = [[0.0, 0.0], [4.0, 0.0], [4.0, 3.0], [0.0, 3.0]]
+closed = true
+
+[[fill]]
+id = "fl"
+boundary = "zone"
+points = [[0.0, 0.0], [4.0, 0.0], [4.0, 3.0]]
+
+[[array]]
+target = "fl"
+mode = "linear"
+count = 2
+offset = [3.0, 0.0]
+"#,
+        );
+        let out = expand_cf(&cf);
+        assert_eq!(out.fills.len(), 2);
+        assert_eq!(out.fills[1].common.id.as_deref(), Some("fl@1"));
+        assert_eq!(
+            out.fills[1].boundary.as_deref(),
+            Some("zone"),
+            "boundary not in targets must stay unsuffixed"
+        );
+        assert_eq!(out.polylines.len(), 1, "untargeted boundary is not copied");
+    }
+
+    #[test]
+    fn fill_copy_retargets_boundary_when_boundary_copied_too() {
+        // Both the fill and its boundary are targeted: the copy must point
+        // at the copied boundary id.
+        let cf = parse(
+            r#"
+[[polyline]]
+id = "zone"
+points = [[0.0, 0.0], [4.0, 0.0], [4.0, 3.0], [0.0, 3.0]]
+closed = true
+
+[[fill]]
+id = "fl"
+boundary = "zone"
+points = [[0.0, 0.0], [4.0, 0.0], [4.0, 3.0]]
+
+[[array]]
+targets = ["fl", "zone"]
+mode = "linear"
+count = 2
+offset = [3.0, 0.0]
+"#,
+        );
+        let out = expand_cf(&cf);
+        assert_eq!(out.fills.len(), 2);
+        assert_eq!(out.polylines.len(), 2);
+        assert_eq!(out.polylines[1].common.id.as_deref(), Some("zone@1"));
+        assert_eq!(out.fills[1].boundary.as_deref(), Some("zone@1"));
+    }
+
+    #[test]
+    fn linear_array_copies_points_moving_position() {
+        let cf = parse(
+            r#"
+[[point]]
+id = "p"
+position = [1.0, 2.0]
+
+[[array]]
+target = "p"
+mode = "linear"
+count = 3
+offset = [2.0, 0.0]
+"#,
+        );
+        let out = expand_cf(&cf);
+        assert_eq!(out.points.len(), 3, "both point copies must be created");
+        assert_eq!(out.points[1].common.id.as_deref(), Some("p@1"));
+        assert_eq!(out.points[2].common.id.as_deref(), Some("p@2"));
+        assert_eq!(out.points[1].position, [3.0, 2.0]);
+        assert_eq!(out.points[2].position, [5.0, 2.0]);
+    }
+
+    #[test]
+    fn transform_points_translates_some_and_keeps_none() {
+        let mut pts = Some(vec![[0.0, 0.0], [1.0, 2.0]]);
+        transform_points(&mut pts, &PointOp::Translate { dx: 3.0, dy: -1.0 });
+        assert_eq!(pts, Some(vec![[3.0, -1.0], [4.0, 1.0]]));
+
+        let mut none: Option<Vec<[f64; 2]>> = None;
+        transform_points(&mut none, &PointOp::Translate { dx: 3.0, dy: -1.0 });
+        assert_eq!(none, None, "None points stay None");
     }
 }

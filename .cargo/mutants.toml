@@ -1,0 +1,16 @@
+# cargo-mutants configuration for cadspec.
+# Every exclusion is an adapter that cannot be exercised offline: it spawns a
+# real external process. No logic is excluded; everything else in the diff is
+# covered by unit/integration tests.
+
+# Not an exclusion. cargo-mutants derives the per-mutant test timeout from
+# `baseline x 5`; on the loaded shared runner a slow-but-passing suite can
+# exceed that and get mis-reported as TIMEOUT. A genuine hang is still
+# reported (and killed) at 10x the baseline.
+timeout_multiplier = 10
+
+exclude_re = [
+  # src/serve/inspect.rs::open_browser — spawns the real OS browser
+  # (xdg-open / open / cmd start) against a real desktop session.
+  "replace open_browser with",
+]

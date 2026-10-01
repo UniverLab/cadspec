@@ -374,4 +374,19 @@ mod tests {
     fn rasterize_rejects_invalid_svg() {
         assert!(rasterize("not an svg", 1.0).is_err());
     }
+
+    #[test]
+    fn fontdb_loads_embedded_monospace() {
+        // The rasterizer's text path depends on the embedded DejaVu Sans Mono
+        // being registered in the (lazily built) font database.
+        let db = fontdb();
+        let query = usvg::fontdb::Query {
+            families: &[usvg::fontdb::Family::Name("DejaVu Sans Mono")],
+            ..Default::default()
+        };
+        assert!(
+            db.query(&query).is_some(),
+            "embedded DejaVu Sans Mono not found in fontdb"
+        );
+    }
 }

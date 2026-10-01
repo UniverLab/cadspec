@@ -1,0 +1,8 @@
+[project]
+name = "svg-golden-entities"
+units = "m"
+
+[layers]
+plano = { file = "plano.cf", locked = false }
+marca = { file = "marca.cf", locked = false }
+oculta = { file = "oculta.cf", locked = false }

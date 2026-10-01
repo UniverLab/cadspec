@@ -1,0 +1,6 @@
+[project]
+name = "svg-golden-grid-origin"
+units = "m"
+
+[layers]
+rejilla = { file = "rejilla.cf", locked = false }

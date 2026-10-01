@@ -1,0 +1,16 @@
+[layer]
+name = "rejilla"
+color = "#FFFFFF"
+
+# Extents x in [-6, 7], y in [-5, 6]: C = 13, world_w = 15 -> step 0.5.
+# Grid lines land exactly on 0 on both axes (axis-colour mutants); dyadic
+# values keep the bounded-loop rewrite bit-identical.
+[[line]]
+id = "go-h"
+from = [-6.0, 0.0]
+to = [7.0, 0.0]
+
+[[line]]
+id = "go-v"
+from = [0.0, -5.0]
+to = [0.0, 6.0]

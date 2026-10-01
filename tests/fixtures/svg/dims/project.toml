@@ -1,0 +1,6 @@
+[project]
+name = "svg-golden-dims"
+units = "m"
+
+[layers]
+cotas = { file = "cotas.cf", locked = false }
