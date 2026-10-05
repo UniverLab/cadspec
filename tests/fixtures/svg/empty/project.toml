@@ -1,0 +1,6 @@
+[project]
+name = "svg-golden-empty"
+units = "m"
+
+[layers]
+vacia = { file = "vacia.cf", locked = false }

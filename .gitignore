@@ -58,3 +58,6 @@ CLAUDE.md
 AGENTS.md
 
 .mimocode/
+
+# Large video files
+*.mp4

@@ -14,10 +14,11 @@
 
 <p align="center">
   <a href="https://github.com/UniverLab/cadspec/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/UniverLab/cadspec/ci.yml?branch=main&style=for-the-badge&label=CI" alt="CI"/></a>
-  <a href="https://crates.io/crates/cadspec"><img src="https://img.shields.io/crates/v/cadspec?style=for-the-badge&logo=rust&logoColor=white" alt="Crates.io"/></a>
   <img src="https://img.shields.io/badge/Status-Active-27AE60?style=for-the-badge" alt="Status"/>
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-2E8B57?style=for-the-badge" alt="License"/></a>
 </p>
+
+<p align="center"><a href="https://univerlab.org/cadspec/">Project home — the UniverLab experiment page</a></p>
 
 cadspec is a **CAD as code** CLI tool and Rust library for declarative CAD modeling. Write geometry as code in `.cf` TOML format, watch it live in the browser, and compile to DXF — built for humans and AI agents working together.
 
@@ -45,7 +46,7 @@ cadspec is a **CAD as code** CLI tool and Rust library for declarative CAD model
 **Linux / macOS:**
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/UniverLab/cadspec/main/scripts/install.sh | sh
+curl -fsSL https://install.univerlab.org/cadspec | sh
 ```
 
 **Windows (PowerShell):**
@@ -53,14 +54,6 @@ curl -fsSL https://raw.githubusercontent.com/UniverLab/cadspec/main/scripts/inst
 ```powershell
 irm https://raw.githubusercontent.com/UniverLab/cadspec/main/scripts/install.ps1 | iex
 ```
-
-### Via cargo
-
-```bash
-cargo install cadspec
-```
-
-Available on [crates.io](https://crates.io/crates/cadspec).
 
 ### From source
 

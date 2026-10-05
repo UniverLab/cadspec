@@ -3,13 +3,20 @@
 use crate::color::{hex_to_24bit, hex_to_aci, weight_to_dxf};
 use crate::dxf_writer::{DxfWriter, EntityStyle};
 use crate::model::{CfFile, CommonAttrs, LineStyle};
-use crate::parser::{parse_cf, parse_project, LayerEntry, ProjectFile};
+use crate::parser::{parse_cf, parse_project, LayerEntry};
 use crate::transform::expand_cf;
 use anyhow::{bail, Context, Result};
 use indexmap::IndexMap;
 use serde::Serialize;
 use std::collections::HashSet;
 use std::path::Path;
+
+mod emit;
+mod rules;
+
+use self::emit::compile_cf;
+pub use self::emit::compile_cf_public;
+use self::rules::{is_strict, validate_constraints};
 
 #[derive(Debug, Clone, Copy)]
 struct Bounds {
@@ -42,14 +49,6 @@ impl Bounds {
             && other.max_x <= self.max_x
             && other.max_y <= self.max_y
     }
-}
-
-#[derive(Default)]
-struct ConstraintRules {
-    parent: Vec<(String, String)>,
-    belongs_to: Vec<(String, String)>,
-    spatial_dependency: Vec<(String, String)>,
-    strict: bool,
 }
 
 // ── Style resolution (DRY: one place to convert CommonAttrs → EntityStyle) ──
@@ -86,45 +85,6 @@ fn load_layers(
         loaded.insert(name.clone(), expand_cf(&cf));
     }
     Ok(loaded)
-}
-
-fn extract_constraint_rules(project: &ProjectFile) -> ConstraintRules {
-    let mut rules = ConstraintRules::default();
-    let Some(toml::Value::Table(table)) = project.constraints.as_ref() else {
-        return rules;
-    };
-
-    for (key, value) in table {
-        if key == "strict" {
-            if let toml::Value::Boolean(strict) = value {
-                rules.strict = *strict;
-            }
-            continue;
-        }
-
-        if key.contains('→') {
-            if let toml::Value::String(kind) = value {
-                if kind == "spatial_dependency" {
-                    let mut parts = key.split('→').map(|s| s.trim().to_string());
-                    if let (Some(from), Some(to)) = (parts.next(), parts.next()) {
-                        rules.spatial_dependency.push((from, to));
-                    }
-                }
-            }
-            continue;
-        }
-
-        if let toml::Value::Table(child_rules) = value {
-            if let Some(toml::Value::String(parent)) = child_rules.get("parent") {
-                rules.parent.push((key.clone(), parent.clone()));
-            }
-            if let Some(toml::Value::String(parent)) = child_rules.get("belongs_to") {
-                rules.belongs_to.push((key.clone(), parent.clone()));
-            }
-        }
-    }
-
-    rules
 }
 
 fn layer_bbox(cf: &CfFile) -> Option<Bounds> {
@@ -223,94 +183,6 @@ fn for_each_common(cf: &CfFile, mut f: impl FnMut(&CommonAttrs)) {
     for e in &cf.groups {
         f(&e.common);
     }
-}
-
-fn validate_constraints(project: &ProjectFile, layers: &IndexMap<String, CfFile>) -> Vec<String> {
-    let rules = extract_constraint_rules(project);
-    let mut issues = Vec::new();
-
-    for (child, parent) in &rules.parent {
-        match (layers.get(child), layers.get(parent)) {
-            (Some(child_cf), Some(parent_cf)) => {
-                let child_bbox = layer_bbox(child_cf);
-                let parent_bbox = layer_bbox(parent_cf);
-                match (child_bbox, parent_bbox) {
-                    (Some(c), Some(p)) => {
-                        if !p.contains(&c) {
-                            issues.push(format!(
-                                "Layer '{}' violates parent='{}': child bbox [{:.2}, {:.2}]->[{:.2}, {:.2}] is outside parent bbox [{:.2}, {:.2}]->[{:.2}, {:.2}]",
-                                child, parent, c.min_x, c.min_y, c.max_x, c.max_y, p.min_x, p.min_y, p.max_x, p.max_y
-                            ));
-                        }
-                    }
-                    _ => {
-                        issues.push(format!(
-                            "Layer '{}' parent='{}' cannot be validated because one layer has no measurable geometry",
-                            child, parent
-                        ));
-                    }
-                }
-            }
-            _ => issues.push(format!(
-                "Invalid parent constraint: '{}' or '{}' layer does not exist",
-                child, parent
-            )),
-        }
-    }
-
-    for (child, parent) in &rules.belongs_to {
-        match (layers.get(child), layers.get(parent)) {
-            (Some(child_cf), Some(parent_cf)) => {
-                let parent_ids = collect_layer_ids(parent_cf);
-                let mut total = 0usize;
-                let mut referenced = 0usize;
-
-                for_each_common(child_cf, |common| {
-                    total += 1;
-                    if let Some(reference) = &common.belongs_to {
-                        referenced += 1;
-                        if !parent_ids.contains(reference) {
-                            issues.push(format!(
-                                "Layer '{}' has belongs_to='{}' but id does not exist in parent layer '{}'",
-                                child, reference, parent
-                            ));
-                        }
-                    }
-                });
-
-                if total > 0 && referenced == 0 {
-                    issues.push(format!(
-                        "Layer '{}' has belongs_to='{}' constraint but no primitives define belongs_to references",
-                        child, parent
-                    ));
-                }
-            }
-            _ => issues.push(format!(
-                "Invalid belongs_to constraint: '{}' or '{}' layer does not exist",
-                child, parent
-            )),
-        }
-    }
-
-    for (from, to) in &rules.spatial_dependency {
-        if layers.contains_key(from) && layers.contains_key(to) {
-            issues.push(format!(
-                "spatial_dependency '{}' -> '{}' registered; dynamic movement tracking is not implemented yet (warning only)",
-                from, to
-            ));
-        } else {
-            issues.push(format!(
-                "Invalid spatial_dependency '{}' -> '{}': one layer does not exist",
-                from, to
-            ));
-        }
-    }
-
-    issues
-}
-
-fn is_strict(project: &ProjectFile) -> bool {
-    project.project.strict || extract_constraint_rules(project).strict
 }
 
 fn print_constraint_issues(issues: &[String]) {
@@ -555,179 +427,6 @@ fn entity_count(cf: &CfFile) -> usize {
         + cf.hatches.len()
         + cf.fills.len()
         + cf.groups.len()
-}
-
-/// Compile a single .cf file into the DxfWriter (public for integration tests).
-pub fn compile_cf_public(writer: &mut DxfWriter, cf: &CfFile, default_layer: &str) {
-    compile_cf(writer, cf, default_layer);
-}
-
-/// Compile a single .cf file into the DxfWriter.
-fn compile_cf(writer: &mut DxfWriter, cf: &CfFile, default_layer: &str) {
-    if let Some(meta) = &cf.layer_meta {
-        if let Some(color) = &meta.color {
-            writer.add_layer(default_layer, hex_to_aci(color));
-        }
-    }
-
-    for e in &cf.lines {
-        let style = resolve_style(&e.common);
-        writer.line(
-            e.from[0],
-            e.from[1],
-            e.to[0],
-            e.to[1],
-            resolve_layer(&e.common, default_layer),
-            &style,
-        );
-    }
-
-    for e in &cf.polylines {
-        let style = resolve_style(&e.common);
-        let pts: Vec<(f64, f64)> = e.points.iter().map(|p| (p[0], p[1])).collect();
-        writer.polyline(
-            &pts,
-            e.closed,
-            resolve_layer(&e.common, default_layer),
-            &style,
-        );
-    }
-
-    for e in &cf.rects {
-        let style = resolve_style(&e.common);
-        writer.rect(
-            e.origin[0],
-            e.origin[1],
-            e.width,
-            e.height,
-            resolve_layer(&e.common, default_layer),
-            &style,
-        );
-    }
-
-    for e in &cf.circles {
-        let style = resolve_style(&e.common);
-        writer.circle(
-            e.center[0],
-            e.center[1],
-            e.radius,
-            resolve_layer(&e.common, default_layer),
-            &style,
-        );
-    }
-
-    for e in &cf.arcs {
-        let style = resolve_style(&e.common);
-        writer.arc(
-            e.center[0],
-            e.center[1],
-            e.radius,
-            e.from_angle,
-            e.to_angle,
-            resolve_layer(&e.common, default_layer),
-            &style,
-        );
-    }
-
-    for e in &cf.texts {
-        let style = resolve_style(&e.common);
-        writer.text(
-            e.position[0],
-            e.position[1],
-            e.size,
-            &e.content,
-            e.rotation.unwrap_or(0.0),
-            resolve_layer(&e.common, default_layer),
-            &style,
-        );
-    }
-
-    for e in &cf.points {
-        let style = resolve_style(&e.common);
-        writer.point(
-            e.position[0],
-            e.position[1],
-            resolve_layer(&e.common, default_layer),
-            &style,
-        );
-    }
-
-    for e in &cf.dims {
-        let style = resolve_style(&e.common);
-        let dist = ((e.to[0] - e.from[0]).powi(2) + (e.to[1] - e.from[1]).powi(2)).sqrt();
-        let label =
-            crate::svg::format_dim_label(dist, e.precision.unwrap_or(2) as usize, e.show_units, "")
-                .trim_end()
-                .to_string();
-        writer.dim_linear(
-            e.from[0],
-            e.from[1],
-            e.to[0],
-            e.to[1],
-            e.offset,
-            &label,
-            e.text_size.unwrap_or(0.25),
-            resolve_layer(&e.common, default_layer),
-            &style,
-        );
-    }
-
-    // Hatches: resolve boundary by id, generate pattern lines
-    for e in &cf.hatches {
-        let layer = resolve_layer(&e.common, default_layer);
-        let style = resolve_style(&e.common);
-        let spacing = 0.1 * e.scale; // base spacing scaled
-
-        let boundary = if let Some(ref boundary_id) = e.boundary {
-            let resolved = resolve_boundary(boundary_id, cf);
-            if resolved.is_none() {
-                warn_unresolved_boundary(
-                    "hatch",
-                    e.common.id.as_deref(),
-                    boundary_id,
-                    default_layer,
-                );
-            }
-            resolved
-        } else {
-            e.points
-                .as_ref()
-                .map(|p| p.iter().map(|v| (v[0], v[1])).collect())
-        };
-
-        if let Some(boundary) = boundary {
-            writer.hatch(
-                &boundary, e.angle, spacing, e.scale, &e.pattern, layer, &style,
-            );
-        }
-    }
-
-    // Solid fills
-    for e in &cf.fills {
-        let layer = resolve_layer(&e.common, default_layer);
-        let style = resolve_style(&e.common);
-
-        let pts = if let Some(ref boundary_id) = e.boundary {
-            let resolved = resolve_boundary(boundary_id, cf);
-            if resolved.is_none() {
-                warn_unresolved_boundary(
-                    "fill",
-                    e.common.id.as_deref(),
-                    boundary_id,
-                    default_layer,
-                );
-            }
-            resolved
-        } else {
-            e.points
-                .as_ref()
-                .map(|p| p.iter().map(|v| (v[0], v[1])).collect())
-        };
-
-        if let Some(pts) = pts {
-            writer.solid_fill(&pts, layer, &style);
-        }
-    }
 }
 
 /// Warn (without failing the build) when a hatch/fill references a boundary id

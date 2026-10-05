@@ -365,4 +365,231 @@ mod tests {
         assert_eq!(weight_to_dxf(0.50), 50);
         assert_eq!(weight_to_dxf(1.0), 100);
     }
+
+    // ---- hex_to_aci edge cases ----
+
+    #[test]
+    fn hex_to_aci_all_zeros() {
+        assert_eq!(hex_to_aci("#000000"), 250);
+    }
+
+    #[test]
+    fn hex_to_aci_all_ffs() {
+        assert_eq!(hex_to_aci("#FFFFFF"), 7);
+    }
+
+    #[test]
+    fn hex_to_aci_without_hash_prefix() {
+        assert_eq!(hex_to_aci("FF0000"), 1);
+    }
+
+    #[test]
+    fn hex_to_aci_empty_string() {
+        assert_eq!(hex_to_aci(""), 7);
+    }
+
+    #[test]
+    fn hex_to_aci_too_short() {
+        assert_eq!(hex_to_aci("#FF"), 7);
+        assert_eq!(hex_to_aci("#FFF0"), 7);
+    }
+
+    #[test]
+    fn hex_to_aci_too_long() {
+        assert_eq!(hex_to_aci("#FF0000FF"), 7);
+    }
+
+    #[test]
+    fn hex_to_aci_non_hex_chars() {
+        assert_eq!(hex_to_aci("#ZZZZZZ"), 7);
+        assert_eq!(hex_to_aci("#GGGGGG"), 7);
+    }
+
+    #[test]
+    fn hex_to_aci_each_primary_channel_boundary() {
+        // Pure red
+        assert_eq!(hex_to_aci("#FF0000"), 1);
+        // Pure green
+        assert_eq!(hex_to_aci("#00FF00"), 3);
+        // Pure blue
+        assert_eq!(hex_to_aci("#0000FF"), 5);
+    }
+
+    #[test]
+    fn hex_to_aci_exact_palette_entry_roundtrips() {
+        // Pick a few exact palette entries and verify they roundtrip
+        for index in [1, 2, 3, 4, 5, 6, 7, 8, 9, 250] {
+            let hex = aci_to_hex(index);
+            assert_eq!(hex_to_aci(&hex), index, "failed for ACI {index}");
+        }
+    }
+
+    // ---- aci_to_hex edge cases ----
+
+    #[test]
+    fn aci_to_hex_out_of_range_returns_white() {
+        assert_eq!(aci_to_hex(0), "#FFFFFF"); // BYBLOCK
+                                              // 256 is out of u8 range, so test boundary at 255 and 0
+        assert_eq!(aci_to_hex(0), "#FFFFFF"); // below valid range
+        assert_eq!(aci_to_hex(255), "#FFFFFF"); // 255 IS valid, and happens to be white
+    }
+
+    #[test]
+    fn aci_to_hex_valid_range_never_white_except_known() {
+        // ACI 7 is white in AutoCAD; 0 and 255 are also white (out-of-range/BYBLOCK).
+        // All other entries 1-254 (except 7) should not be pure white.
+        for index in 1..=254u8 {
+            if index == 7 {
+                continue; // ACI 7 is legitimately white
+            }
+            assert_ne!(
+                aci_to_hex(index),
+                "#FFFFFF",
+                "ACI {index} unexpectedly returned white"
+            );
+        }
+    }
+
+    #[test]
+    fn aci_to_hex_black() {
+        assert_eq!(aci_to_hex(250), "#000000");
+    }
+
+    #[test]
+    fn aci_to_hex_always_has_hash_prefix() {
+        for index in [1, 50, 100, 150, 200, 255] {
+            assert!(
+                aci_to_hex(index).starts_with('#'),
+                "ACI {index} missing # prefix"
+            );
+        }
+    }
+
+    #[test]
+    fn aci_to_hex_always_7_chars() {
+        for index in 1..=255u8 {
+            assert_eq!(aci_to_hex(index).len(), 7, "ACI {index} wrong length");
+        }
+    }
+
+    // ---- hex_to_24bit edge cases ----
+
+    #[test]
+    fn hex_to_24bit_all_zeros() {
+        assert_eq!(hex_to_24bit("#000000"), 0x000000);
+    }
+
+    #[test]
+    fn hex_to_24bit_all_ones() {
+        assert_eq!(hex_to_24bit("#FFFFFF"), 0xFFFFFF);
+    }
+
+    #[test]
+    fn hex_to_24bit_without_hash() {
+        assert_eq!(hex_to_24bit("FF0000"), 0xFF0000);
+    }
+
+    #[test]
+    fn hex_to_24bit_invalid_returns_default() {
+        assert_eq!(hex_to_24bit(""), 0x00FF_FFFF);
+        assert_eq!(hex_to_24bit("#ZZZZZZ"), 0x00FF_FFFF);
+        assert_eq!(hex_to_24bit("not_a_color"), 0x00FF_FFFF);
+    }
+
+    #[test]
+    fn hex_to_24bit_short_hex() {
+        // from_str_radix accepts shorter strings (pads with leading zeros)
+        assert_eq!(hex_to_24bit("#FFF"), 0xFFF);
+        assert_eq!(hex_to_24bit("#0F0"), 0x0F0);
+    }
+
+    #[test]
+    fn hex_to_24bit_single_byte() {
+        assert_eq!(hex_to_24bit("#0F"), 0x0F);
+    }
+
+    // ---- weight_to_dxf edge cases ----
+
+    #[test]
+    fn weight_to_dxf_zero() {
+        assert_eq!(weight_to_dxf(0.0), 0);
+    }
+
+    #[test]
+    fn weight_to_dxf_negative() {
+        assert_eq!(weight_to_dxf(-0.1), -10);
+    }
+
+    #[test]
+    fn weight_to_dxf_very_small() {
+        // 0.01 mm = 1 hundredth
+        assert_eq!(weight_to_dxf(0.01), 1);
+    }
+
+    #[test]
+    fn weight_to_dxf_fractional_rounding() {
+        // f64 * 100.0 then as i16 truncates toward zero
+        let result = weight_to_dxf(0.355);
+        assert_eq!(result, 35); // 0.355 * 100.0 = 35.5 → truncated to 35
+    }
+
+    #[test]
+    fn weight_to_dxf_large_value() {
+        // 100mm → 10000 hundredths
+        assert_eq!(weight_to_dxf(100.0), 10000);
+    }
+
+    #[test]
+    fn weight_to_dxf_typical_lineweights() {
+        // Common DXF lineweights
+        assert_eq!(weight_to_dxf(0.13), 13);
+        assert_eq!(weight_to_dxf(0.18), 18);
+        assert_eq!(weight_to_dxf(0.25), 25);
+        assert_eq!(weight_to_dxf(0.30), 30);
+        assert_eq!(weight_to_dxf(0.35), 35);
+        assert_eq!(weight_to_dxf(0.50), 50);
+        assert_eq!(weight_to_dxf(0.70), 70);
+        assert_eq!(weight_to_dxf(1.00), 100);
+        assert_eq!(weight_to_dxf(1.40), 140);
+        assert_eq!(weight_to_dxf(2.00), 200);
+    }
+
+    // ---- roundtrip conversions ----
+
+    #[test]
+    fn aci_hex_roundtrip_all_valid_indices() {
+        for index in 1..=255u8 {
+            let hex = aci_to_hex(index);
+            let back = hex_to_aci(&hex);
+            let hex2 = aci_to_hex(back);
+            assert_eq!(
+                hex, hex2,
+                "ACI {index}: {hex} → {back} → {hex2} — color drifted"
+            );
+        }
+    }
+
+    #[test]
+    fn hex_to_24bit_roundtrip_with_aci() {
+        // A true roundtrip: hex → ACI → hex → 24bit should be deterministic
+        let original = "#FF0000";
+        let aci = hex_to_aci(original);
+        let hex_from_aci = aci_to_hex(aci);
+        let bits = hex_to_24bit(&hex_from_aci);
+        assert_eq!(bits, 0xFF0000);
+    }
+
+    #[test]
+    fn hex_to_aci_consistency_across_prefixes() {
+        let with_hash = hex_to_aci("#FF0000");
+        let without_hash = hex_to_aci("FF0000");
+        assert_eq!(with_hash, without_hash);
+    }
+
+    #[test]
+    fn hex_to_24bit_consistency_across_prefixes() {
+        let with_hash = hex_to_24bit("#AABBCC");
+        let without_hash = hex_to_24bit("AABBCC");
+        assert_eq!(with_hash, without_hash);
+    }
 }

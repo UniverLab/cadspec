@@ -1,0 +1,21 @@
+[layer]
+name = "rejilla"
+color = "#FFFFFF"
+
+# Extents x in [-4, 13], y in [-3, 4].
+#
+# Chosen so the *whole* family of arithmetic mutants on draw_grid's
+# `max_x - min_x + PADDING * 2.0` lands in a different grid_step bucket than the
+# original. `-` binds looser than `*`, so `+ -> *` rewrites the term to
+# `max_x - 2*min_x = 21.0` (step 1.0) while the original is
+# `13 - (-4) + 2 = 19.0` (step 0.5). The other three grid fixtures all sit
+# inside a single bucket and cannot see that difference.
+[[line]]
+id = "gs-h"
+from = [-4.0, 0.0]
+to = [13.0, 0.0]
+
+[[line]]
+id = "gs-v"
+from = [0.0, -3.0]
+to = [0.0, 4.0]
