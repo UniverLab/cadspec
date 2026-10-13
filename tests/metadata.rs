@@ -11,6 +11,7 @@ use std::fs;
 use std::path::Path;
 
 const EXPERIMENT_HOME: &str = "https://univerlab.org/cadspec/";
+const ARCHIVE_ENTRY: &str = "https://univerlab.org/archive#exp-005";
 const REPOSITORY: &str = "https://github.com/UniverLab/cadspec";
 
 fn package_file(name: &str) -> String {
@@ -73,7 +74,7 @@ fn readme_keeps_the_badges_that_stay() {
     let readme = package_file("README.md");
     for badge in [
         "img.shields.io/github/actions/workflow/status",
-        "img.shields.io/badge/Status-Active",
+        "img.shields.io/badge/Status-Archived",
         "img.shields.io/badge/License-MIT",
     ] {
         assert!(
@@ -84,22 +85,21 @@ fn readme_keeps_the_badges_that_stay() {
 }
 
 #[test]
-fn readme_links_the_experiment_page_once_under_the_badges() {
+fn readme_archive_notice_sits_under_the_badges() {
     let readme = package_file("README.md");
-    // Counting the scheme-qualified URL is what makes "once" mean once: the
-    // install host `https://install.univerlab.org/cadspec` shares the tail
-    // `univerlab.org/cadspec` but not this whole string.
+    // The experiment page retired with the archive: the README points once
+    // at the lab's archive entry instead, right under the badges.
     assert_eq!(
-        readme.matches(EXPERIMENT_HOME).count(),
+        readme.matches(ARCHIVE_ENTRY).count(),
         1,
-        "the experiment page must be linked exactly once"
+        "the archive entry must be linked exactly once"
     );
     let badges_end = readme.find("</p>").expect("badge block");
-    let home = readme.find(EXPERIMENT_HOME).expect("home link");
+    let notice = readme.find(ARCHIVE_ENTRY).expect("archive link");
     let features = readme.find("## Features").expect("Features heading");
     assert!(
-        home > badges_end && home < features,
-        "the home link belongs right under the badges, above the intro"
+        notice > badges_end && notice < features,
+        "the archive notice belongs right under the badges, above the intro"
     );
 }
 
