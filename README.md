@@ -14,11 +14,14 @@
 
 <p align="center">
   <a href="https://github.com/UniverLab/cadspec/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/UniverLab/cadspec/ci.yml?branch=main&style=for-the-badge&label=CI" alt="CI"/></a>
-  <img src="https://img.shields.io/badge/Status-Active-27AE60?style=for-the-badge" alt="Status"/>
+  <img src="https://img.shields.io/badge/Status-Archived-7F8C8D?style=for-the-badge" alt="Status"/>
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-2E8B57?style=for-the-badge" alt="License"/></a>
 </p>
 
-<p align="center"><a href="https://univerlab.org/cadspec/">Project home — the UniverLab experiment page</a></p>
+> [!WARNING]
+> **cadspec is archived (October 2026).** UniverLab experiment EXP-005 is discontinued and receives no further updates or releases.
+> Mature tools already cover this space better: [ezdxf](https://ezdxf.readthedocs.io/) for 2D DXF, [CadQuery](https://cadquery.readthedocs.io/) for 3D, [OpenSCAD](https://openscad.org/) scripts, and FreeCAD with an MCP server.
+> Installed binaries keep working; the code stays here as a read-only record. Why it closed: [univerlab.org/archive](https://univerlab.org/archive#exp-005).
 
 cadspec is a **CAD as code** CLI tool and Rust library for declarative CAD modeling. Write geometry as code in `.cf` TOML format, watch it live in the browser, and compile to DXF — built for humans and AI agents working together.
 
